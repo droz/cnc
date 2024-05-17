@@ -5,6 +5,9 @@ program (Shapeoko) or the laser program (Lightburn)."""
 
 import tkinter as tk
 import tkdial as tkdial
+import argparse
+import time
+import serial
 import sys
 import os
 
@@ -62,6 +65,44 @@ class Gauge:
             self.button.config(image = self.on)
             self.state = True
 
+class GrblInterface:
+    """ This class is used to interface with the GRBL controller."""
+    def __init__(self, port):
+        self.serial = serial.Serial(port, 115200, timeout=5)
+
+    def wakeUp(self):
+        """ This function is used to wake up the GRBL controller."""
+        self.serial.write(b"\r\n\r\n")
+        time.sleep(2)
+        self.serial.flushInput()
+
+    def readSettings(self):
+        """ This function is used to read the settings of the GRBL controller."""
+        self.connection.write(b"$$\n")
+        time.sleep(1)
+        response = self.serial.read_all()
+        return response
+
+
+def runCNC():
+    """ This function is used to run the CNC controller program."""
+    args = argparse.ArgumentParser(description="CNC controller")
+    args.add_argument("--grbl_port", help="COM port connected to the GRBL controller", default="COM6", type=str)
+    args.add_argument("--arduino_port", help="COM port connected to the Arduino board", default="COM7", type=str)
+
+
+    grbl = GrblInterface(args.grbl_port)
+    grbl.wakeUp()
+    settings = grbl.readSettings()
+    print(settings)
+
+
+    print("Running CNC program")
+
+
+
+if __name__ == '__main__':
+    sys.exit(runCNC())
 
 
 # vacuum
