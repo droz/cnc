@@ -19,6 +19,9 @@
 
 CRGB leds[NUM_LEDS];
 
+static const int CMD_BUFFER_MAX_SIZE = 64; 
+char cmd_buffer[CMD_BUFFER_SIZE];
+int cmd_buffer_index = 0;
 
 void setup() {
   // Serial
@@ -61,7 +64,38 @@ void setup() {
 
 }
 
+void processCmd() {
+  // Process the command in the buffer
+  Serial.print("Command: ");
+  Serial.println(cmd_buffer);
+
+
+  // Reset the buffer
+  cmd_buffer_index = 0;
+}
+
+
 void loop() {
+  // Wait for new command
+  if (Serial.available() > 0) {
+    // read the incoming byte and add it to the current command buffer
+    char command = Serial.read();
+    if (char == '\n') {
+      // This command is ready to go
+      processCmd();
+    } else {
+      if (cmd_buffer_index < CMD_BUFFER_MAX_SIZE) {
+        cmd_buffer[cmd_buffer_index] = command;
+        cmd_buffer_index++;
+      } else {
+        // Buffer overflow, reset buffer
+        cmd_buffer_index = 0;
+      }
+    }
+  }
+
+
+
   // put your main code here, to run repeatedly:
   Serial.println("Test");
 
