@@ -10,6 +10,7 @@ import time
 import serial
 import sys
 import os
+import re
 
 def resource_path(relative_path):
     """ Get absolute path to resource """
@@ -68,7 +69,7 @@ class Gauge:
 class GrblInterface:
     """ This class is used to interface with the GRBL controller."""
     def __init__(self, port):
-        self.serial = serial.Serial(port, 115200, timeout=5)
+        self.serial = serial.Serial(port, 115200, timeout=1)
 
     def wakeUp(self):
         """ This function is used to wake up the GRBL controller."""
@@ -77,22 +78,44 @@ class GrblInterface:
         self.serial.flushInput()
 
     def readSettings(self):
-        """ This function is used to read the settings of the GRBL controller."""
-        self.connection.write(b"$$\n")
-        time.sleep(1)
-        response = self.serial.read_all()
-        return response
+        """ This function is used to read the settings of the GRBL controller.
+        Returns:
+            A dictionary of values indexed by integer key."""
+        self.serial.write(b"$$\n")
+        time.sleep(0.1)
+        response = self.serial.read_all().decode('utf-8').replace('\r', '')
+        settings = {}
+        for line in response.split("\n"):
+            result = re.match(r"\$(\d+)=(.*)", line)
+            if result:
+                key = int(result.group(1))
+                value = result.group(2)
+                settings[key] = value
+        return settings
 
+    def writeSettings(self, key, value):
+        """ This function is used to write a setting to the GRBL controller.
+        Args:
+            key: The integer key of the setting.
+            value: The value of the setting."""
+        self.serial.write(f"${key}={value}\n".encode('utf-8'))
+        time.sleep(0.1)
+        response = self.serial.read_all().decode('utf-8').replace('\r', '')
+        if response != 'ok\n':
+            raise Exception(f"Error writing setting {key}={value}")
 
 def runCNC():
     """ This function is used to run the CNC controller program."""
-    args = argparse.ArgumentParser(description="CNC controller")
-    args.add_argument("--grbl_port", help="COM port connected to the GRBL controller", default="COM6", type=str)
-    args.add_argument("--arduino_port", help="COM port connected to the Arduino board", default="COM7", type=str)
-
+    arg_parser = argparse.ArgumentParser(description="CNC controller")
+    arg_parser.add_argument("--grbl_port", help="COM port connected to the GRBL controller", default="COM6", type=str)
+    arg_parser.add_argument("--arduino_port", help="COM port connected to the Arduino board", default="COM7", type=str)
+    args = arg_parser.parse_args()
 
     grbl = GrblInterface(args.grbl_port)
     grbl.wakeUp()
+    settings = grbl.readSettings()
+    print(settings)
+    grbl.writeSettings(31, 0)
     settings = grbl.readSettings()
     print(settings)
 
