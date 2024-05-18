@@ -49,6 +49,20 @@ class OnOffToggle:
             self.state = True
         self.callback(self)
 
+class Slider:
+    """ This is used to implement a simple slider."""
+    def __init__(self, window, text, row, min, max, callback):
+        self.window = window
+        self.value = tk.DoubleVar(window, 0)
+        self.callback = callback
+        self.slider = tk.Scale(window, from_=min, to=max, orient=tk.HORIZONTAL, variable=self.value, command=self.update, resolution=(max-min)/100)
+        self.slider.grid(column=1, row=row, padx=10, pady=5)
+        self.text = tk.Label(window, text=text, font=("Arial", 18))
+        self.text.grid(column=0, row=row, padx=10, pady=5)
+
+    def update(self, value):
+        self.callback(self)
+
 class Gauge:
     """ This is used to implement a simple linear dial indicator."""
     def __init__(self, window, text, row, min, max, nominal, initial_value):
@@ -147,6 +161,14 @@ class CNC:
         self.grbl = GrblInterface(grbl_port)
         self.arduino = ArduinoInterface(arduino_port)
 
+    def pumpChange(self, slider):
+        """ This function is used to change the stepper speed."""
+        if slider.value.get() == 0:
+            interval = 0
+        else:
+            interval = int(200 / slider.value.get())
+        self.arduino.writeValue("pump_interval_ms", str(interval))
+
     def airToggle(self, toggle):
         """ This function is used to toggle the air valve."""
         if toggle.state:
@@ -206,6 +228,7 @@ def runCNC():
     hood_on = OnOffToggle(window, "Hood", 2, cnc.hoodToggle)
     spindle_on = OnOffToggle(window, "Spindle", 3, cnc.spindleToggle)
     laser_on = OnOffToggle(window, "Laser", 4, cnc.laserToggle)
+    pump_speed = Slider(window, "Pump Speed", 5, 0, 100, cnc.pumpChange)
 
 #    air_pressure = Gauge(window, "Air Pressure", 2, 0, 100, 50, 50)
 
