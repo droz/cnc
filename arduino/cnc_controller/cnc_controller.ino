@@ -25,7 +25,7 @@ static const int CMD_BUFFER_MAX_SIZE = 64;
 String cmd_buffer = "";
 
 // The current interval between pump steps, in ms
-int pump_interval_ms = 100;
+int pump_interval_ms = 0;
 
 // The timer used to step the pump motor
 //TimerInterrupt timer1(2);
@@ -63,7 +63,6 @@ void setup() {
   digitalWrite(PIN_PUMP_STEP, LOW);
   // Timer to trigger pump steps
   ITimer1.init();
-  ITimer1.attachInterruptInterval(10, pumpStep);
 
   // Switches
   pinMode(PIN_DOOR, INPUT_PULLUP);
@@ -92,8 +91,8 @@ void processCmd() {
   if (cmd_buffer.startsWith("status")) {
     // Send status
     Serial.println("door=" + String(!digitalRead(PIN_DOOR)));
-    Serial.println("head=" + String(!digitalRead(PIN_LASER_HEAD)));
-    Serial.println("vacuum_force=" + String(!digitalRead(PIN_VACUUM_FORCE)));
+    Serial.println("laser_head=" + String(!digitalRead(PIN_LASER_HEAD)));
+    Serial.println("force_vacuum=" + String(!digitalRead(PIN_VACUUM_FORCE)));
     Serial.println("vacuum=" + String(digitalRead(PIN_VACUUM)));
     Serial.println("hood=" + String(digitalRead(PIN_HOOD)));
     Serial.println("pressure=" + String(analogRead(PIN_PRESSURE)));
@@ -179,6 +178,7 @@ void processCmd() {
     sscanf(cmd_buffer.c_str(), "pump_interval_ms=%d", &pump_interval_ms);
     if (pump_interval_ms == 0) {
       digitalWrite(PIN_PUMP_ENA, HIGH);
+      ITimer1.stopTimer();
       sendDone();
       return;
     }

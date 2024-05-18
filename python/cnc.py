@@ -22,31 +22,36 @@ def resource_path(relative_path):
     return os.path.join(base_path, 'images', relative_path)
 
 
-window = tk.Tk()
-window.title("CNC Control Panel")
-
-
 class OnOffToggle:
     """ This is used to implement a simple ON/OFF toggle button."""
-    on = tk.PhotoImage(file = resource_path("on.png"))
-    off = tk.PhotoImage(file = resource_path("off.png"))
-    def __init__(self, window, text, row, callback):
+    def __init__(self, window, text, row, callback, read_only=False):
         self.window = window
         self.state = False
         self.callback = callback
-
+        self.read_only = read_only
+        if self.read_only:
+            self.on = tk.PhotoImage(file = resource_path("on_ro.png"))
+            self.off = tk.PhotoImage(file = resource_path("off_ro.png"))
+        else:
+            self.on = tk.PhotoImage(file = resource_path("on.png"))
+            self.off = tk.PhotoImage(file = resource_path("off.png"))
         self.button = tk.Button(window, image=self.off, command=self.switch, bd=0)
         self.button.grid(column=1, row=row, padx=10, pady=5)
         self.text = tk.Label(window, text=text, font=("Arial", 18))
         self.text.grid(column=0, row=row, padx=10, pady=5)
 
-    def switch(self):
+    def update(self, value):
+        self.state = value
         if self.state:
-            self.button.config(image = self.off)
-            self.state = False
-        else:
             self.button.config(image = self.on)
-            self.state = True
+        else:
+            self.button.config(image = self.off)
+
+    def switch(self):
+        if self.read_only:
+            return
+        self.state = not self.state
+        self.update(self.state)
         self.callback(self)
 
 class Slider:
@@ -55,32 +60,30 @@ class Slider:
         self.window = window
         self.value = tk.DoubleVar(window, 0)
         self.callback = callback
-        self.slider = tk.Scale(window, from_=min, to=max, orient=tk.HORIZONTAL, variable=self.value, command=self.update, resolution=(max-min)/100)
+        self.slider = tk.Scale(window, from_=min, to=max, orient=tk.HORIZONTAL, variable=self.value, command=self.changed, resolution=(max-min)/100)
         self.slider.grid(column=1, row=row, padx=10, pady=5)
         self.text = tk.Label(window, text=text, font=("Arial", 18))
         self.text.grid(column=0, row=row, padx=10, pady=5)
 
     def update(self, value):
+        self.value.set(value)
+
+    def changed(self, value):
         self.callback(self)
 
 class Gauge:
     """ This is used to implement a simple linear dial indicator."""
-    def __init__(self, window, text, row, min, max, nominal, initial_value):
+    def __init__(self, window, text, row, min, max, nominal):
         self.window = window
-        self.value = tk.DoubleVar(window, initial_value)
-        self.meter = tkdial.Meter(window, start=min, end=max)
+        self.value = tk.DoubleVar(window, 0)
+        self.meter = tkdial.Meter(window, start=min, end=max, radius = 100, width = 200, height = 200)
         self.meter.set_mark(nominal - 10, nominal + 10, "green")
         self.meter.grid(column=1, row=row, padx=10, pady=5)
         self.text = tk.Label(window, text=text, font=("Arial", 18))
         self.text.grid(column=0, row=row, padx=10, pady=5)
 
-    def switch(self):
-        if self.state:
-            self.button.config(image = self.off)
-            self.state = False
-        else:
-            self.button.config(image = self.on)
-            self.state = True
+    def update(self, value):
+        self.meter.set(value)
 
 class GrblInterface:
     """ This class is used to interface with the GRBL controller."""
@@ -93,6 +96,10 @@ class GrblInterface:
         self.serial.write(b"\r\n\r\n")
         time.sleep(1)
         self.serial.flushInput()
+
+    def close(self):
+        """ This function is used to close the serial connection to the GRBL controller."""
+        self.serial.close()
 
     def readSettings(self):
         """ This function is used to read the settings of the GRBL controller.
@@ -134,7 +141,6 @@ class ArduinoInterface:
         self.serial.write(b"status\n")
         time.sleep(0.1)
         response = self.serial.read_all().decode('utf-8').replace('\r', '')
-        print(response)
         status = {}
         for line in response.split("\n"):
             result = re.match(r"(.*)=(.*)", line)
@@ -160,6 +166,28 @@ class CNC:
     def __init__(self, grbl_port, arduino_port):
         self.grbl = GrblInterface(grbl_port)
         self.arduino = ArduinoInterface(arduino_port)
+        self.gui = None
+
+    def update(self):
+        # Read the status of the Arduino board
+        status = self.arduino.readStatus()
+        # Update the UI if needed
+        if self.gui:
+            self.gui.air_on.update(status["air"] == "1")
+            self.gui.vacuum_on.update(status["vacuum"] == "1")
+            self.gui.hood_on.update(status["hood"] == "1")
+            self.gui.spindle_on.update(status["spindle"] == "1")
+            self.gui.laser_on.update(status["laser"] == "1")
+            pump_interval_ms = int(status["pump_interval_ms"])
+            if pump_interval_ms == 0:
+                self.gui.pump_speed.value.set(0)
+            else:
+                self.gui.pump_speed.value.set(200 / pump_interval_ms)
+            self.gui.door_closed.update(status["door"] == "1")
+            self.gui.laser_present.update(status["laser_head"] == "1")
+            self.gui.force_vacuum.update(status["force_vacuum"] == "1")
+            self.gui.air_pressure.update(int(status["pressure"]))
+            self.gui.pwm.update(int(status["pwm"]))
 
     def pumpChange(self, slider):
         """ This function is used to change the stepper speed."""
@@ -204,6 +232,28 @@ class CNC:
         else:
             self.arduino.writeValue("laser", "0")
 
+class Gui:
+    """ This class is used to create the GUI for the CNC controller."""
+    def __init__(self, cnc):
+        self.window = tk.Tk()
+        self.window.title("CNC Control Panel")
+
+        self.air_on = OnOffToggle(self.window, "Air", 0, cnc.airToggle)
+        self.vacuum_on = OnOffToggle(self.window, "Vacuum", 1, cnc.vacuumToggle)
+        self.hood_on = OnOffToggle(self.window, "Hood", 2, cnc.hoodToggle)
+        self.spindle_on = OnOffToggle(self.window, "Spindle", 3, cnc.spindleToggle)
+        self.laser_on = OnOffToggle(self.window, "Laser", 4, cnc.laserToggle)
+        self.pump_speed = Slider(self.window, "Pump Speed", 5, 0, 100, cnc.pumpChange)
+        self.door_closed = OnOffToggle(self.window, "Door Closed", 6, None, read_only=True)
+        self.laser_present = OnOffToggle(self.window, "Laser Present", 7, None, read_only=True)
+        self.force_vacuum = OnOffToggle(self.window, "Force Vacuum", 8, None, read_only=True)
+        self.air_pressure = Gauge(self.window, "Air Pressure", 9, 0, 1024, 50)
+        self.pwm = Gauge(self.window, "PWM", 10, 0, 1024, 50)
+
+    def update(self):
+        self.window.update_idletasks()
+        self.window.update()
+
 def runCNC():
     """ This function is used to run the CNC controller program."""
     arg_parser = argparse.ArgumentParser(description="CNC controller")
@@ -215,29 +265,19 @@ def runCNC():
     settings = cnc.grbl.readSettings()
     print("GRBL settings:")
     print(settings)
+    cnc.grbl.close()
     status = cnc.arduino.readStatus()
     print("Arduino status:")
     print(status)
 
-    print("Running CNC program")
+    # Create the GUI
+    gui = Gui(cnc)
+    cnc.gui = gui
 
-#    vacuum_on = OnOffToggle(window, "Vacuum", 0, True)
-
-    air_on = OnOffToggle(window, "Air", 0, cnc.airToggle)
-    vacuum_on = OnOffToggle(window, "Vacuum", 1, cnc.vacuumToggle)
-    hood_on = OnOffToggle(window, "Hood", 2, cnc.hoodToggle)
-    spindle_on = OnOffToggle(window, "Spindle", 3, cnc.spindleToggle)
-    laser_on = OnOffToggle(window, "Laser", 4, cnc.laserToggle)
-    pump_speed = Slider(window, "Pump Speed", 5, 0, 100, cnc.pumpChange)
-
-#    air_pressure = Gauge(window, "Air Pressure", 2, 0, 100, 50, 50)
-
-#    mist_on = OnOffToggle(window, "Mist", 3, True)
-
-#    laser_power = Gauge(window, "Laser Power", 4, 0, 100, 50, 50)
-
-    window.mainloop()
-
+    # Main loop
+    while True:
+        cnc.update()
+        gui.update()
 
 if __name__ == '__main__':
     sys.exit(runCNC())
