@@ -1,4 +1,6 @@
 #include <FastLED.h>
+#define USE_TIMER_1 true
+#include <TimerInterrupt.h>
 
 #define PIN_LEDS 4
 #define PIN_SPINDLE A0
@@ -19,9 +21,14 @@
 
 CRGB leds[NUM_LEDS];
 
-static const int CMD_BUFFER_MAX_SIZE = 64; 
-char cmd_buffer[CMD_BUFFER_SIZE];
-int cmd_buffer_index = 0;
+static const int CMD_BUFFER_MAX_SIZE = 64;
+String cmd_buffer = "";
+
+// The current interval between pump steps, in ms
+int pump_interval_ms = 100;
+
+// The timer used to step the pump motor
+//TimerInterrupt timer1(2);
 
 void setup() {
   // Serial
@@ -30,6 +37,10 @@ void setup() {
   // LEDs
   FastLED.addLeds<WS2812B, PIN_LEDS, RGB>(leds, NUM_LEDS);
   FastLED.setBrightness(255);
+  leds[0] = CRGB::Red;
+  leds[1] = CRGB::Green;
+  leds[2] = CRGB::Blue;
+  FastLED.show();
 
   // Spindle
   pinMode(PIN_SPINDLE, OUTPUT);
@@ -47,9 +58,12 @@ void setup() {
   pinMode(PIN_PUMP_ENA, OUTPUT);
   digitalWrite(PIN_PUMP_ENA, HIGH);
   pinMode(PIN_PUMP_DIR, OUTPUT);
-  digitalWrite(PIN_PUMP_DIR, LOW);
+  digitalWrite(PIN_PUMP_DIR, HIGH);
   pinMode(PIN_PUMP_STEP, OUTPUT);
   digitalWrite(PIN_PUMP_STEP, LOW);
+  // Timer to trigger pump steps
+  ITimer1.init();
+  ITimer1.attachInterruptInterval(10, pumpStep);
 
   // Switches
   pinMode(PIN_DOOR, INPUT_PULLUP);
@@ -64,89 +78,141 @@ void setup() {
 
 }
 
-void processCmd() {
-  // Process the command in the buffer
-  Serial.print("Command: ");
-  Serial.println(cmd_buffer);
-
-
-  // Reset the buffer
-  cmd_buffer_index = 0;
+void pumpStep() {
+  digitalWrite(PIN_PUMP_STEP, HIGH);
+  digitalWrite(PIN_PUMP_STEP, LOW);
 }
 
+void sendDone() {
+  Serial.println("done");
+}
+
+void processCmd() {
+  // Process the command in the buffer
+  if (cmd_buffer.startsWith("status")) {
+    // Send status
+    Serial.println("door=" + String(!digitalRead(PIN_DOOR)));
+    Serial.println("head=" + String(!digitalRead(PIN_LASER_HEAD)));
+    Serial.println("vacuum_force=" + String(!digitalRead(PIN_VACUUM_FORCE)));
+    Serial.println("vacuum=" + String(digitalRead(PIN_VACUUM)));
+    Serial.println("hood=" + String(digitalRead(PIN_HOOD)));
+    Serial.println("pressure=" + String(analogRead(PIN_PRESSURE)));
+    Serial.println("pwm=" + String(analogRead(PIN_PWM)));
+    Serial.println("spindle=" + String(digitalRead(PIN_SPINDLE)));
+    Serial.println("laser=" + String(digitalRead(PIN_LASER)));
+    Serial.println("air=" + String(digitalRead(PIN_AIR)));
+    Serial.println("pump_interval_ms=" + String(pump_interval_ms));
+    Serial.println("led0=" + String(leds[0].r) + "," + String(leds[0].g) + "," + String(leds[0].b));
+    Serial.println("led1=" + String(leds[1].r) + "," + String(leds[1].g) + "," + String(leds[1].b));
+    Serial.println("led2=" + String(leds[2].r) + "," + String(leds[2].g) + "," + String(leds[2].b));
+    return;
+  }
+  if (cmd_buffer.startsWith("led0=")) {
+    // Set LED 0
+    int r, g, b;
+    sscanf(cmd_buffer.c_str(), "led0=%d,%d,%d", &r, &g, &b);
+    leds[0] = CRGB(r, g, b);
+    FastLED.show();
+    sendDone();
+    return;
+  }
+  if (cmd_buffer.startsWith("led1=")) {
+    // Set LED 1
+    int r, g, b;
+    sscanf(cmd_buffer.c_str(), "led1=%d,%d,%d", &r, &g, &b);
+    leds[1] = CRGB(r, g, b);
+    FastLED.show();
+    sendDone();
+    return;
+  }
+  if (cmd_buffer.startsWith("led2=")) {
+    // Set LED 2
+    int r, g, b;
+    sscanf(cmd_buffer.c_str(), "led2=%d,%d,%d", &r, &g, &b);
+    leds[2] = CRGB(r, g, b);
+    FastLED.show();
+    sendDone();
+    return;
+  }
+  if (cmd_buffer.startsWith("spindle=")) {
+    // Set Spindle
+    int state;
+    sscanf(cmd_buffer.c_str(), "spindle=%d", &state);
+    digitalWrite(PIN_SPINDLE, state);
+    sendDone();
+    return;
+  }
+  if (cmd_buffer.startsWith("laser=")) {
+    // Set Laser
+    int state;
+    sscanf(cmd_buffer.c_str(), "laser=%d", &state);
+    digitalWrite(PIN_LASER, state);
+    sendDone();
+    return;
+  }
+  if (cmd_buffer.startsWith("air=")) {
+    // Set Air
+    int state;
+    sscanf(cmd_buffer.c_str(), "air=%d", &state);
+    digitalWrite(PIN_AIR, state);
+    sendDone();
+    return;
+  }
+  if (cmd_buffer.startsWith("vacuum=")) {
+    // Set Vacuum
+    int state;
+    sscanf(cmd_buffer.c_str(), "vacuum=%d", &state);
+    digitalWrite(PIN_VACUUM, state);
+    sendDone();
+    return;
+  }
+  if (cmd_buffer.startsWith("hood=")) {
+    // Set Hood
+    int state;
+    sscanf(cmd_buffer.c_str(), "hood=%d", &state);
+    digitalWrite(PIN_HOOD, state);
+    sendDone();
+    return;
+  }
+  if (cmd_buffer.startsWith("pump_interval_ms=")) {
+    // Set Pump Speed
+    sscanf(cmd_buffer.c_str(), "pump_interval_ms=%d", &pump_interval_ms);
+    if (pump_interval_ms == 0) {
+      digitalWrite(PIN_PUMP_ENA, HIGH);
+      sendDone();
+      return;
+    }
+    if (pump_interval_ms < 0 || pump_interval_ms > 1000) {
+      digitalWrite(PIN_PUMP_ENA, HIGH);
+      Serial.println("args_error");
+    }
+    digitalWrite(PIN_PUMP_ENA, LOW);
+    ITimer1.setInterval(pump_interval_ms, pumpStep);
+    sendDone();
+    return;
+  }
+  // Unknown command
+  Serial.println("unknown");
+}
 
 void loop() {
   // Wait for new command
   if (Serial.available() > 0) {
     // read the incoming byte and add it to the current command buffer
-    char command = Serial.read();
-    if (char == '\n') {
+    char c = Serial.read();
+    if (c == '\n') {
       // This command is ready to go
       processCmd();
+      cmd_buffer = "";
     } else {
-      if (cmd_buffer_index < CMD_BUFFER_MAX_SIZE) {
-        cmd_buffer[cmd_buffer_index] = command;
-        cmd_buffer_index++;
+      // Add the character to the buffer
+      if (cmd_buffer.length() < CMD_BUFFER_MAX_SIZE) {
+        cmd_buffer += c;
       } else {
         // Buffer overflow, reset buffer
-        cmd_buffer_index = 0;
+        cmd_buffer = "";
       }
     }
   }
-
-
-
-  // put your main code here, to run repeatedly:
-  Serial.println("Test");
-
-  leds[0] = CRGB::Red;
-  leds[1] = CRGB::Green;
-  leds[2] = CRGB::Blue;
-
   FastLED.show();
-
-  digitalWrite(PIN_PUMP_ENA, HIGH);
-  digitalWrite(PIN_PUMP_DIR, HIGH);
-  
-
-  while(0) {
-    digitalWrite(PIN_PUMP_STEP, HIGH);
-    digitalWrite(PIN_PUMP_STEP, LOW);
-    delay(1);
-  }
-
-
-  // //digitalWrite(PIN_AIR, 1);
-  // delay(100);
-  // int pressure = analogRead(PIN_PRESSURE);
-  // Serial.println(pressure);
-  // delay(1000);
-  // //digitalWrite(PIN_AIR, 0);
-  // delay(500);
-  // pressure = analogRead(PIN_PRESSURE);
-  // Serial.println(pressure);
-  // delay(1000);
-
-  // delay(1000);
-  // digitalWrite(PIN_SPINDLE, 1);
-  // delay(200);
-  // digitalWrite(PIN_LASER, 1);
-  // delay(1000);
-  // digitalWrite(PIN_SPINDLE, 0);
-  // delay(200);
-  // digitalWrite(PIN_LASER, 0);
-
-  Serial.print("Door: ");
-  Serial.println(digitalRead(PIN_DOOR));
-  Serial.print("Head: ");
-  Serial.println(digitalRead(PIN_LASER_HEAD));
-  Serial.print("Vacuum Force: ");
-  Serial.println(digitalRead(PIN_VACUUM_FORCE));
-
-  digitalWrite(PIN_SPINDLE, 1);
-  int pwm = analogRead(PIN_PWM);
-  Serial.println(pwm);
-  delay(500);
-
-  //delay(10000);
 }

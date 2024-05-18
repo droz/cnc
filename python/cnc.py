@@ -30,11 +30,12 @@ class OnOffToggle:
     """ This is used to implement a simple ON/OFF toggle button."""
     on = tk.PhotoImage(file = resource_path("on.png"))
     off = tk.PhotoImage(file = resource_path("off.png"))
-    def __init__(self, window, text, row, initial_state = True):
+    def __init__(self, window, text, row, callback):
         self.window = window
-        self.state = initial_state
+        self.state = False
+        self.callback = callback
 
-        self.button = tk.Button(window, image=self.on, command=self.switch, bd=0)
+        self.button = tk.Button(window, image=self.off, command=self.switch, bd=0)
         self.button.grid(column=1, row=row, padx=10, pady=5)
         self.text = tk.Label(window, text=text, font=("Arial", 18))
         self.text.grid(column=0, row=row, padx=10, pady=5)
@@ -46,6 +47,7 @@ class OnOffToggle:
         else:
             self.button.config(image = self.on)
             self.state = True
+        self.callback(self)
 
 class Gauge:
     """ This is used to implement a simple linear dial indicator."""
@@ -70,11 +72,12 @@ class GrblInterface:
     """ This class is used to interface with the GRBL controller."""
     def __init__(self, port):
         self.serial = serial.Serial(port, 115200, timeout=1)
+        self.wakeUp()
 
     def wakeUp(self):
         """ This function is used to wake up the GRBL controller."""
         self.serial.write(b"\r\n\r\n")
-        time.sleep(2)
+        time.sleep(1)
         self.serial.flushInput()
 
     def readSettings(self):
@@ -104,6 +107,81 @@ class GrblInterface:
         if response != 'ok\n':
             raise Exception(f"Error writing setting {key}={value}")
 
+class ArduinoInterface:
+    """ This class is used to interface with the Arduino board."""
+    def __init__(self, port):
+        self.serial = serial.Serial(port, 115200, timeout=1)
+        time.sleep(2)
+
+    def readStatus(self):
+        """ This function is used to read the status of the Arduino board.
+        Returns:
+            A dictionary of values indexed by string key."""
+        self.serial.write(b"status\n")
+        time.sleep(0.1)
+        response = self.serial.read_all().decode('utf-8').replace('\r', '')
+        print(response)
+        status = {}
+        for line in response.split("\n"):
+            result = re.match(r"(.*)=(.*)", line)
+            if result:
+                key = result.group(1)
+                value = result.group(2)
+                status[key] = value
+        return status
+
+    def writeValue(self, key, value):
+        """ This function is used to write a setting to the Arduino board.
+        Args:
+            key: The string key of the setting.
+            value: The value of the setting."""
+        self.serial.write(f"{key}={value}\n".encode('utf-8'))
+        time.sleep(0.1)
+        response = self.serial.read_all().decode('utf-8').replace('\r', '')
+        if response != 'done\n':
+            raise Exception(f"Error writing value {key}={value}")
+
+class CNC:
+    """ This is the main class used to keep track of the CNC state and interface to it"""
+    def __init__(self, grbl_port, arduino_port):
+        self.grbl = GrblInterface(grbl_port)
+        self.arduino = ArduinoInterface(arduino_port)
+
+    def airToggle(self, toggle):
+        """ This function is used to toggle the air valve."""
+        if toggle.state:
+            self.arduino.writeValue("air", "1")
+        else:
+            self.arduino.writeValue("air", "0")
+
+    def vacuumToggle(self, toggle):
+        """ This function is used to toggle the vacuum pump."""
+        if toggle.state:
+            self.arduino.writeValue("vacuum", "1")
+        else:
+            self.arduino.writeValue("vacuum", "0")
+
+    def hoodToggle(self, toggle):
+        """ This function is used to toggle the hood."""
+        if toggle.state:
+            self.arduino.writeValue("hood", "1")
+        else:
+            self.arduino.writeValue("hood", "0")
+
+    def spindleToggle(self, toggle):
+        """ This function is used to toggle the spindle."""
+        if toggle.state:
+            self.arduino.writeValue("spindle", "1")
+        else:
+            self.arduino.writeValue("spindle", "0")
+
+    def laserToggle(self, toggle):
+        """ This function is used to toggle the laser."""
+        if toggle.state:
+            self.arduino.writeValue("laser", "1")
+        else:
+            self.arduino.writeValue("laser", "0")
+
 def runCNC():
     """ This function is used to run the CNC controller program."""
     arg_parser = argparse.ArgumentParser(description="CNC controller")
@@ -111,32 +189,33 @@ def runCNC():
     arg_parser.add_argument("--arduino_port", help="COM port connected to the Arduino board", default="COM7", type=str)
     args = arg_parser.parse_args()
 
-    grbl = GrblInterface(args.grbl_port)
-    grbl.wakeUp()
-    settings = grbl.readSettings()
+    cnc = CNC(args.grbl_port, args.arduino_port)
+    settings = cnc.grbl.readSettings()
+    print("GRBL settings:")
     print(settings)
-    grbl.writeSettings(31, 0)
-    settings = grbl.readSettings()
-    print(settings)
-
+    status = cnc.arduino.readStatus()
+    print("Arduino status:")
+    print(status)
 
     print("Running CNC program")
 
+#    vacuum_on = OnOffToggle(window, "Vacuum", 0, True)
+
+    air_on = OnOffToggle(window, "Air", 0, cnc.airToggle)
+    vacuum_on = OnOffToggle(window, "Vacuum", 1, cnc.vacuumToggle)
+    hood_on = OnOffToggle(window, "Hood", 2, cnc.hoodToggle)
+    spindle_on = OnOffToggle(window, "Spindle", 3, cnc.spindleToggle)
+    laser_on = OnOffToggle(window, "Laser", 4, cnc.laserToggle)
+
+#    air_pressure = Gauge(window, "Air Pressure", 2, 0, 100, 50, 50)
+
+#    mist_on = OnOffToggle(window, "Mist", 3, True)
+
+#    laser_power = Gauge(window, "Laser Power", 4, 0, 100, 50, 50)
+
+    window.mainloop()
 
 
 if __name__ == '__main__':
     sys.exit(runCNC())
 
-
-# vacuum
-vacuum_on = OnOffToggle(window, "Vacuum", 0, True)
-
-air_on = OnOffToggle(window, "Air", 1, True)
-
-air_pressure = Gauge(window, "Air Pressure", 2, 0, 100, 50, 50)
-
-mist_on = OnOffToggle(window, "Mist", 3, True)
-
-laser_power = Gauge(window, "Laser Power", 4, 0, 100, 50, 50)
-
-window.mainloop()
