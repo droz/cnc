@@ -2,11 +2,13 @@
 #define USE_TIMER_1 true
 #include <TimerInterrupt.h>
 
+#include <limits.h>
+
 #define PIN_LEDS 4
 #define PIN_SPINDLE A0
 #define PIN_LASER A1
 #define PIN_AIR 13
-#define PIN_PRESSURE A7
+#define PIN_PRESSURE A6
 #define PIN_PUMP_ENA 8
 #define PIN_PUMP_DIR 7
 #define PIN_PUMP_STEP 6
@@ -16,19 +18,47 @@
 #define PIN_VACUUM 11
 #define PIN_VACUUM_FORCE 2
 #define PIN_HOOD 10
-
 #define NUM_LEDS 3
 
+// Various delays, all in ms
+// laser off to air off
+#define LASER_OFF_TO_AIR_OFF_MS 10000
+// laser off to hood off
+#define LASER_OFF_TO_HOOD_OFF_MS 5000
+// spindle off to vacuum off
+#define SPINDLE_OFF_TO_VACUUM_OFF_MS 5000
+// spindle off to mist off
+#define SPINDLE_OFF_TO_MIST_OFF_MS 1000
+
+// The LED strip
 CRGB leds[NUM_LEDS];
 
+// The buffer that contains the current command
 static const int CMD_BUFFER_MAX_SIZE = 64;
 String cmd_buffer = "";
 
 // The current interval between pump steps, in ms
 int pump_interval_ms = 0;
 
-// The timer used to step the pump motor
-//TimerInterrupt timer1(2);
+// The mode in which we operate the machine
+typedef enum {
+  MODE_IDLE = 0,
+  MODE_ROUTER = 1,
+  MODE_LASER = 2,
+  MODE_MANUAL = 3
+} MachineMode;
+static MachineMode mode = MODE_IDLE;
+
+// This is the last time at which the mode was set by the computer
+static int32_t mode_set_time = LONG_MIN;
+// This is the last time at which the laser was on
+static int32_t laser_on_time = LONG_MIN;
+// This is the last time at which the spindle was on
+static int32_t spindle_on_time = LONG_MIN;
+// This is the last time at which we ran the main loop
+static int32_t last_loop_time = LONG_MIN;
+
+static String debug = "";
 
 void setup() {
   // Serial
@@ -90,6 +120,7 @@ void processCmd() {
   // Process the command in the buffer
   if (cmd_buffer.startsWith("status")) {
     // Send status
+    Serial.println("mode=" + String(mode));
     Serial.println("door=" + String(!digitalRead(PIN_DOOR)));
     Serial.println("laser_head=" + String(!digitalRead(PIN_LASER_HEAD)));
     Serial.println("force_vacuum=" + String(!digitalRead(PIN_VACUUM_FORCE)));
@@ -104,6 +135,25 @@ void processCmd() {
     Serial.println("led0=" + String(leds[0].r) + "," + String(leds[0].g) + "," + String(leds[0].b));
     Serial.println("led1=" + String(leds[1].r) + "," + String(leds[1].g) + "," + String(leds[1].b));
     Serial.println("led2=" + String(leds[2].r) + "," + String(leds[2].g) + "," + String(leds[2].b));
+    Serial.println("debug=" + debug);
+    return;
+  }
+  if (cmd_buffer.startsWith("mode=")) {
+    // Set mode
+    int new_mode;
+    sscanf(cmd_buffer.c_str(), "mode=%d", &new_mode);
+    if (new_mode == MODE_IDLE || new_mode == MODE_LASER || new_mode == MODE_ROUTER || new_mode == MODE_MANUAL) {
+      mode = (MachineMode)new_mode;
+      mode_set_time = millis();
+      sendDone();
+    } else {
+      Serial.println("args_error");
+    }
+    return;
+  }
+  // If we are in IDLE mode, then all other commands are ignored
+  if (mode == MODE_IDLE) {
+    Serial.println("unknown");
     return;
   }
   if (cmd_buffer.startsWith("led0=")) {
@@ -196,6 +246,8 @@ void processCmd() {
 }
 
 void loop() {
+  uint32_t now = millis();
+
   // Wait for new command
   if (Serial.available() > 0) {
     // read the incoming byte and add it to the current command buffer
@@ -215,4 +267,48 @@ void loop() {
     }
   }
   FastLED.show();
+
+  // This tells us when the laser was last on
+  bool laser_is_on = digitalRead(PIN_LASER) && analogRead(PIN_PWM);
+  if (laser_is_on) {
+    laser_on_time = now;
+  }
+  // This tells us when the spindle was last on
+  bool spindle_is_on = digitalRead(PIN_SPINDLE) && analogRead(PIN_PWM);
+  if (spindle_is_on) {
+    spindle_on_time = now;
+  }
+
+  // There are some things that we want to enforce. This is done here:
+  // - If we are not in router mode, the spindle should be off
+  if (mode != MODE_ROUTER) {
+    digitalWrite(PIN_SPINDLE, LOW);
+  }
+  // - If we are not in laser mode, the laser should be off
+  if (mode != MODE_LASER) {
+    digitalWrite(PIN_LASER, LOW);
+  }
+  // - If we are in laser mode,
+  if (mode == MODE_LASER) {
+    // The laser should be on when the door is closed
+    if (digitalRead(PIN_DOOR)) {
+      digitalWrite(PIN_LASER, LOW);
+    } else {
+      digitalWrite(PIN_LASER, HIGH);
+    }
+    // The air and the hood should be on when the laser is on
+    if (laser_is_on) {
+      digitalWrite(PIN_AIR, HIGH);
+      digitalWrite(PIN_HOOD, HIGH);
+    }
+    // We can turn off the air and hood some time after the laser turns off
+    if ((now - laser_on_time) > LASER_OFF_TO_AIR_OFF_MS && (last_loop_time - laser_on_time) < LASER_OFF_TO_AIR_OFF_MS) {
+      digitalWrite(PIN_AIR, LOW);
+    }
+    if ((now - laser_on_time) > LASER_OFF_TO_HOOD_OFF_MS && (last_loop_time - laser_on_time) < LASER_OFF_TO_HOOD_OFF_MS) {
+      digitalWrite(PIN_HOOD, LOW);
+    }
+  }
+
+  last_loop_time = now;
 }

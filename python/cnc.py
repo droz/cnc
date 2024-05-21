@@ -11,6 +11,7 @@ import serial
 import sys
 import os
 import re
+import enum
 
 def resource_path(relative_path):
     """ Get absolute path to resource """
@@ -52,6 +53,24 @@ class OnOffToggle:
             return
         self.state = not self.state
         self.update(self.state)
+        self.callback(self)
+
+class MultiChoice:
+    """ This is used to implement a simple multi-choice button."""
+    def __init__(self, window, text, row, choices, callback):
+        self.window = window
+        self.value = tk.StringVar(window, choices[0])
+        self.callback = callback
+        self.choices = choices
+        self.options = tk.OptionMenu(window, self.value, *choices, command=self.changed)
+        self.options.grid(column=1, row=row, padx=10, pady=5)
+        self.text = tk.Label(window, text=text, font=("Arial", 18))
+        self.text.grid(column=0, row=row, padx=10, pady=5)
+
+    def update(self, value):
+        self.value.set(self.choices[value])
+
+    def changed(self, value):
         self.callback(self)
 
 class Slider:
@@ -126,7 +145,7 @@ class GrblInterface:
         time.sleep(0.1)
         response = self.serial.read_all().decode('utf-8').replace('\r', '')
         if response != 'ok\n':
-            raise Exception(f"Error writing setting {key}={value}")
+            raise Exception(f"Error writing setting {key}={value}. Response was {response}")
 
 class ArduinoInterface:
     """ This class is used to interface with the Arduino board."""
@@ -162,32 +181,71 @@ class ArduinoInterface:
             raise Exception(f"Error writing value {key}={value}")
 
 class CNC:
+    class Mode(enum.Enum):
+        IDLE = 0
+        ROUTER = 1
+        LASER = 2
+        MANUAL = 3
+
     """ This is the main class used to keep track of the CNC state and interface to it"""
     def __init__(self, grbl_port, arduino_port):
-        self.grbl = GrblInterface(grbl_port)
+        #self.grbl = GrblInterface(grbl_port)
         self.arduino = ArduinoInterface(arduino_port)
         self.gui = None
 
     def update(self):
         # Read the status of the Arduino board
         status = self.arduino.readStatus()
+
         # Update the UI if needed
-        if self.gui:
+        if not self.gui:
+            return
+        if self.gui.mode is not None and "mode" in status:
+            self.gui.mode.update(int(status["mode"]))
+        if self.gui.air_on is not None and "air" in status:
             self.gui.air_on.update(status["air"] == "1")
+        if self.gui.vacuum_on is not None and "vacuum" in status:
             self.gui.vacuum_on.update(status["vacuum"] == "1")
+        if self.gui.hood_on is not None and "hood" in status:
             self.gui.hood_on.update(status["hood"] == "1")
+        if self.gui.spindle_on is not None and "spindle" in status:
             self.gui.spindle_on.update(status["spindle"] == "1")
+        if self.gui.laser_on is not None and "laser" in status:
             self.gui.laser_on.update(status["laser"] == "1")
+        if self.gui.pump_speed is not None and "pump_interval_ms" in status:
             pump_interval_ms = int(status["pump_interval_ms"])
             if pump_interval_ms == 0:
                 self.gui.pump_speed.value.set(0)
             else:
                 self.gui.pump_speed.value.set(200 / pump_interval_ms)
+        if self.gui.door_closed is not None and "door" in status:
             self.gui.door_closed.update(status["door"] == "1")
+        if self.gui.laser_present is not None and "laser_head" in status:
             self.gui.laser_present.update(status["laser_head"] == "1")
+        if self.gui.force_vacuum is not None and "force_vacuum" in status:
             self.gui.force_vacuum.update(status["force_vacuum"] == "1")
-            self.gui.air_pressure.update(int(status["pressure"]))
-            self.gui.pwm.update(int(status["pwm"]))
+        if self.gui.air_pressure is not None and "pressure" in status:
+            pressure_int = int(status["pressure"])
+            pressure_psi = (pressure_int - 104.0) / 1024.0 * 100.0
+            if pressure_psi < 0:
+                pressure_psi = 0
+            self.gui.air_pressure.update(pressure_psi)
+        if self.gui.pwm is not None and "pwm" in status:
+            self.gui.pwm.update(float(status["pwm"]) / 1024.0 * 100.0)
+
+    def modeChange(self, choice):
+        """ This function is used to change the mode of the CNC."""
+        if choice.value.get() == "Manual":
+            mode = CNC.Mode.MANUAL
+        elif choice.value.get() == "Router":
+            mode = CNC.Mode.ROUTER
+        elif choice.value.get() == "Laser":
+            mode = CNC.Mode.LASER
+        elif choice.value.get() == "Idle":
+            mode = CNC.Mode.IDLE
+        else:
+            raise Exception(f"Invalid mode {choice.value.get()}")
+        self.arduino.writeValue("mode", str(mode.value))
 
     def pumpChange(self, slider):
         """ This function is used to change the stepper speed."""
@@ -232,23 +290,23 @@ class CNC:
         else:
             self.arduino.writeValue("laser", "0")
 
-class Gui:
-    """ This class is used to create the GUI for the CNC controller."""
+class ManualGui:
+    """ This class is used to create the GUI for the CNC controller in manual mode."""
     def __init__(self, cnc):
         self.window = tk.Tk()
-        self.window.title("CNC Control Panel")
-
-        self.air_on = OnOffToggle(self.window, "Air", 0, cnc.airToggle)
-        self.vacuum_on = OnOffToggle(self.window, "Vacuum", 1, cnc.vacuumToggle)
-        self.hood_on = OnOffToggle(self.window, "Hood", 2, cnc.hoodToggle)
-        self.spindle_on = OnOffToggle(self.window, "Spindle", 3, cnc.spindleToggle)
-        self.laser_on = OnOffToggle(self.window, "Laser", 4, cnc.laserToggle)
-        self.pump_speed = Slider(self.window, "Pump Speed", 5, 0, 100, cnc.pumpChange)
-        self.door_closed = OnOffToggle(self.window, "Door Closed", 6, None, read_only=True)
-        self.laser_present = OnOffToggle(self.window, "Laser Present", 7, None, read_only=True)
-        self.force_vacuum = OnOffToggle(self.window, "Force Vacuum", 8, None, read_only=True)
-        self.air_pressure = Gauge(self.window, "Air Pressure", 9, 0, 1024, 50)
-        self.pwm = Gauge(self.window, "PWM", 10, 0, 1024, 50)
+        self.window.title("CNC - Manual mode")
+        self.mode = MultiChoice(self.window, "Mode", 0, ["Idle", "Router", "Laser", "Manual"], cnc.modeChange)
+        self.spindle_on = OnOffToggle(self.window, "Spindle", 1, cnc.spindleToggle)
+        self.laser_on = OnOffToggle(self.window, "Laser", 2, cnc.laserToggle)
+        self.air_on = OnOffToggle(self.window, "Air", 4, cnc.airToggle)
+        self.vacuum_on = OnOffToggle(self.window, "Vacuum", 5, cnc.vacuumToggle)
+        self.hood_on = OnOffToggle(self.window, "Hood", 6, cnc.hoodToggle)
+        self.pump_speed = Slider(self.window, "Pump Speed", 7, 0, 100, cnc.pumpChange)
+        self.door_closed = OnOffToggle(self.window, "Door Closed", 9, None, read_only=True)
+        self.laser_present = OnOffToggle(self.window, "Laser Present", 10, None, read_only=True)
+        self.force_vacuum = OnOffToggle(self.window, "Force Vacuum Switch", 11, None, read_only=True)
+        self.air_pressure = Gauge(self.window, "Air Pressure", 12, 0, 100, 50)
+        self.pwm = Gauge(self.window, "PWM", 13, 0, 100, 50)
 
     def update(self):
         self.window.update_idletasks()
@@ -262,16 +320,16 @@ def runCNC():
     args = arg_parser.parse_args()
 
     cnc = CNC(args.grbl_port, args.arduino_port)
-    settings = cnc.grbl.readSettings()
-    print("GRBL settings:")
-    print(settings)
-    cnc.grbl.close()
+    # settings = cnc.grbl.readSettings()
+    # print("GRBL settings:")
+    # print(settings)
+    # cnc.grbl.close()
     status = cnc.arduino.readStatus()
     print("Arduino status:")
     print(status)
 
     # Create the GUI
-    gui = Gui(cnc)
+    gui = ManualGui(cnc)
     cnc.gui = gui
 
     # Main loop
