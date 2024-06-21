@@ -22,13 +22,13 @@
 
 // Various delays, all in ms
 // laser off to air off
-#define LASER_OFF_TO_AIR_OFF_MS 10000
+#define LASER_OFF_TO_AIR_OFF_MS 5000
 // laser off to hood off
-#define LASER_OFF_TO_HOOD_OFF_MS 5000
+#define LASER_OFF_TO_HOOD_OFF_MS 240000
 // spindle off to vacuum off
-#define SPINDLE_OFF_TO_VACUUM_OFF_MS 5000
+#define SPINDLE_OFF_TO_VACUUM_OFF_MS 10000
 // spindle off to mist off
-#define SPINDLE_OFF_TO_MIST_OFF_MS 1000
+#define SPINDLE_OFF_TO_MIST_OFF_MS 3000
 
 // The LED strip
 CRGB leds[NUM_LEDS];
@@ -302,10 +302,10 @@ void loop() {
       digitalWrite(PIN_HOOD, HIGH);
     }
     // We can turn off the air and hood some time after the laser turns off
-    if ((now - laser_on_time) > LASER_OFF_TO_AIR_OFF_MS && (last_loop_time - laser_on_time) < LASER_OFF_TO_AIR_OFF_MS) {
+    if ((now - laser_on_time) >= LASER_OFF_TO_AIR_OFF_MS && (last_loop_time - laser_on_time) < LASER_OFF_TO_AIR_OFF_MS) {
       digitalWrite(PIN_AIR, LOW);
     }
-    if ((now - laser_on_time) > LASER_OFF_TO_HOOD_OFF_MS && (last_loop_time - laser_on_time) < LASER_OFF_TO_HOOD_OFF_MS) {
+    if ((now - laser_on_time) >= LASER_OFF_TO_HOOD_OFF_MS && (last_loop_time - laser_on_time) < LASER_OFF_TO_HOOD_OFF_MS) {
       digitalWrite(PIN_HOOD, LOW);
     }
   }
