@@ -12,6 +12,7 @@ import sys
 import os
 import re
 import psutil
+import subprocess
 
 def resource_path(relative_path):
     """ Get absolute path to resource """
@@ -203,15 +204,17 @@ def runCNC():
     mode_group.add_argument("--laser", help="Enable laser mode", action="store_true")
     mode_group.add_argument("--cnc", help="Enable CNC mode", action="store_true")
     mode_group.add_argument("--manual", help="Enable manual mode", action="store_true")
-    arg_parser.add_argument("--lighburn_exec", help="Path to Lightburn executable", default="C:/Program Files/LightBurn/LightBurn.exe", type=str)
-    arg_parser.add_argument("--shapeoko_exec", help="Path to Shapeoko executable", default="C:/Program Files/Carbide Motion/CarbideMotion.exe", type=str)
+    arg_parser.add_argument("--lighburn_exec", help="Path to Lightburn executable", default="C:\\Program Files\\LightBurn\\LightBurn.exe", type=str)
+    arg_parser.add_argument("--shapeoko_exec", help="Path to Shapeoko executable", default="C:\\Program Files (x86)\\Carbide\\carbidemotion.exe", type=str)
     args = arg_parser.parse_args()
 
     # Depending on the mode, we will run the CNC or laser program
     if args.laser:
         killProgramByName(os.path.basename(args.shapeoko_exec))
+        lighburn_process = subprocess.Popen(args.lighburn_exec)
     if args.cnc:
         killProgramByName(os.path.basename(args.lighburn_exec))
+        shapeoko_process = subprocess.Popen(args.shapeoko_exec)
     return
 
     cnc = CNC(args.grbl_port, args.arduino_port)
