@@ -110,7 +110,6 @@ class GrblInterface:
         self.serial.write(f"{command}\n".encode('utf-8'))
         time.sleep(0.1)
         response = self.serial.read_all().decode('utf-8').replace('\r', '')
-        print(response)
         if response != 'ok\n':
             raise Exception(f"Error sending command {command}")
 
@@ -125,10 +124,10 @@ class GrblInterface:
         """ This function is used to home the GRBL controller."""
         print("Homing the machine...")
         # Send the homing command
-        self.sendCommand("$H")
+        self.serial.write("$H\n".encode('utf-8'))
         # Wait for the OK to come back
         now = time.time()
-        while self.serial.in_waiting() == 0:
+        while self.serial.in_waiting == 0:
             if time.time() - now > 40:
                 raise Exception("Timeout waiting for Homing")
             time.sleep(0.1)
@@ -151,7 +150,6 @@ class ArduinoInterface:
         self.serial.write(b"status\n")
         time.sleep(0.1)
         response = self.serial.read_all().decode('utf-8').replace('\r', '')
-        print(response)
         status = {}
         for line in response.split("\n"):
             result = re.match(r"(.*)=(.*)", line)
