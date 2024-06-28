@@ -11,6 +11,7 @@ import serial
 import sys
 import os
 import re
+import psutil
 
 def resource_path(relative_path):
     """ Get absolute path to resource """
@@ -182,12 +183,31 @@ class CNC:
         else:
             self.arduino.writeValue("laser", "0")
 
+def killProgram(executable_name):
+    """ This function is used to kill a specific controller program.
+    Args:
+        executable_name: The name of the executable to kill.
+    """
+    # List all running processes
+    for proc in psutil.process_iter():
+        print(proc.name())
+
+
 def runCNC():
     """ This function is used to run the CNC controller program."""
     arg_parser = argparse.ArgumentParser(description="CNC controller")
     arg_parser.add_argument("--grbl_port", help="COM port connected to the GRBL controller", default="COM6", type=str)
     arg_parser.add_argument("--arduino_port", help="COM port connected to the Arduino board", default="COM7", type=str)
+    arg_parser.add_argument("--laser", help="Enable laser mode", action="store_true")
+    arg_parser.add_argument("--cnc", help="Enable CNC mode", action="store_true")
+    arg_parser.add_argument("--manual", help="Enable manual mode", action="store_true")
+    arg_parser.add_argument("--lighburn_exec", help="Path to Lightburn executable", default="C:/Program Files/LightBurn/LightBurn.exe", type=str)
+    arg_parser.add_argument("--shapeoko_exec", help="Path to Shapeoko executable", default="C:/Program Files/Carbide Motion/CarbideMotion.exe", type=str)
     args = arg_parser.parse_args()
+
+    # Depending on the mode, we will run the CNC or laser program
+    killProgram(args.lighburn_exec)
+    return
 
     cnc = CNC(args.grbl_port, args.arduino_port)
     settings = cnc.grbl.readSettings()
