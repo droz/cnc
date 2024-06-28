@@ -79,7 +79,8 @@ class GrblInterface:
     def wakeUp(self):
         """ This function is used to wake up the GRBL controller."""
         self.serial.write(b"\r\n\r\n")
-        time.sleep(1)
+        time.sleep(2)
+        self.serial.read_all()
         self.serial.flushInput()
 
     def close(self):
@@ -109,6 +110,7 @@ class GrblInterface:
         self.serial.write(f"{command}\n".encode('utf-8'))
         time.sleep(0.1)
         response = self.serial.read_all().decode('utf-8').replace('\r', '')
+        print(response)
         if response != 'ok\n':
             raise Exception(f"Error sending command {command}")
 
