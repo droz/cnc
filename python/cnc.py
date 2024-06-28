@@ -82,6 +82,10 @@ class GrblInterface:
         time.sleep(1)
         self.serial.flushInput()
 
+    def close(self):
+        """ This function is used to close the connection to the GRBL controller."""
+        self.serial.close()
+
     def readSettings(self):
         """ This function is used to read the settings of the GRBL controller.
         Returns:
@@ -98,16 +102,22 @@ class GrblInterface:
                 settings[key] = value
         return settings
 
+    def sendCommand(self, command):
+        """ This function is used to send a command to the GRBL controller.
+        Args:
+            command: The string command to send."""
+        self.serial.write(f"{command}\n".encode('utf-8'))
+        time.sleep(0.1)
+        response = self.serial.read_all().decode('utf-8').replace('\r', '')
+        if response != 'ok\n':
+            raise Exception(f"Error sending command {command}")
+
     def writeSettings(self, key, value):
         """ This function is used to write a setting to the GRBL controller.
         Args:
             key: The integer key of the setting.
             value: The value of the setting."""
-        self.serial.write(f"${key}={value}\n".encode('utf-8'))
-        time.sleep(0.1)
-        response = self.serial.read_all().decode('utf-8').replace('\r', '')
-        if response != 'ok\n':
-            raise Exception(f"Error writing setting {key}={value}")
+        self.sendCommand(f"${key}={value}")
 
 class ArduinoInterface:
     """ This class is used to interface with the Arduino board."""
@@ -209,15 +219,51 @@ def runCNC():
     args = arg_parser.parse_args()
 
     # Depending on the mode, we will run the CNC or laser program
-    if args.laser:
+    # We first kill any of these two that is running
+    if args.laser or args.cnc:
+        killProgramByName(os.path.basename(args.lighburn_exec))
         killProgramByName(os.path.basename(args.shapeoko_exec))
+
+    # Then we connect to the arduino and grbl controllers
+    cnc = CNC(args.grbl_port, args.arduino_port)
+
+    # Now what we do depends on the mode
+    if args.laser:
+        # We first connect to the GRBL controller and make sure that we send the correct settings
+        # Do not report anything back except status
+        cnc.grbl.writeSettings(10, 0)
+        # Set the laser mode
+        cnc.grbl.writeSettings(32, 1)
+        # Set the minimum spindle speed/power to 0
+        cnc.grbl.writeSettings(31, 0)
+        # Set the maximum spindle speed/power to 1000
+        cnc.grbl.writeSettings(30, 1000)
+        # Set the origin to the corner opposite to home
+        cnc.grbl.sendCommand("G10 L2 P1 X-845 Y-845")
+        # Close the connection to the GRBL controller
+        cnc.grbl.close()
+
+        # Then we can open the Lightburn program
         lighburn_process = subprocess.Popen(args.lighburn_exec)
     if args.cnc:
-        killProgramByName(os.path.basename(args.lighburn_exec))
+        # We first connect to the GRBL controller and make sure that we send the correct settings
+        # Report everything back
+        cnc.grbl.writeSettings(10, 255)
+        # Turn off the laser mode
+        cnc.grbl.writeSettings(32, 0)
+        # Set the minimum spindle speed/power to 0
+        cnc.grbl.writeSettings(31, 0)
+        # Set the maximum spindle speed/power to the maximum the spindle can handle
+        cnc.grbl.writeSettings(30, 22800)
+        # Set the origin to the home corner
+        cnc.grbl.sendCommand("G10 L2 P1 X0 Y0")
+        # Close the connection to the GRBL controller
+        cnc.grbl.close()
+
+        # Then we can open the Shapeoko program
         shapeoko_process = subprocess.Popen(args.shapeoko_exec)
     return
 
-    cnc = CNC(args.grbl_port, args.arduino_port)
     settings = cnc.grbl.readSettings()
     print("GRBL settings:")
     print(settings)
