@@ -73,7 +73,7 @@ class Gauge:
 class GrblInterface:
     """ This class is used to interface with the GRBL controller."""
     def __init__(self, port):
-        self.serial = serial.Serial(port, 115200, timeout=1)
+        self.serial = serial.Serial(port, 115200, timeout=60)
         self.wakeUp()
 
     def wakeUp(self):
@@ -120,6 +120,23 @@ class GrblInterface:
             key: The integer key of the setting.
             value: The value of the setting."""
         self.sendCommand(f"${key}={value}")
+
+    def home(self):
+        """ This function is used to home the GRBL controller."""
+        print("Homing the machine...")
+        # Send the homing command
+        self.sendCommand("$H")
+        # Wait for the OK to come back
+        now = time.time()
+        while self.serial.in_waiting() == 0:
+            if time.time() - now > 40:
+                raise Exception("Timeout waiting for Homing")
+            time.sleep(0.1)
+        time.sleep(0.1)
+        response = self.serial.read_all().decode('utf-8').replace('\r', '')
+        if response != 'ok\n':
+            raise Exception(f"Error waiting for home")
+        print("Machine homed")
 
 class ArduinoInterface:
     """ This class is used to interface with the Arduino board."""
@@ -240,6 +257,8 @@ def runCNC():
         cnc.grbl.writeSettings(31, 0)
         # Set the maximum spindle speed/power to 1000
         cnc.grbl.writeSettings(30, 1000)
+        # Home the machine
+        cnc.grbl.home()
         # Set the origin to the corner opposite to home
         cnc.grbl.sendCommand("G10 L2 P1 X-845 Y-845")
         # Close the connection to the GRBL controller
@@ -257,6 +276,8 @@ def runCNC():
         cnc.grbl.writeSettings(31, 0)
         # Set the maximum spindle speed/power to the maximum the spindle can handle
         cnc.grbl.writeSettings(30, 22800)
+        # Home the machine
+        cnc.grbl.home()
         # Set the origin to the home corner
         cnc.grbl.sendCommand("G10 L2 P1 X0 Y0")
         # Close the connection to the GRBL controller
