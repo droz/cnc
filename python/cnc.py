@@ -221,8 +221,10 @@ class CNC:
 
     """ This is the main class used to keep track of the CNC state and interface to it"""
     def __init__(self, grbl_port, arduino_port):
-        self.grbl = GrblInterface(grbl_port)
-        self.arduino = ArduinoInterface(arduino_port)
+        if grbl_port:
+            self.grbl = GrblInterface(grbl_port)
+        if arduino_port:
+            self.arduino = ArduinoInterface(arduino_port)
         self.gui = None
         self.process = None
 
@@ -278,6 +280,10 @@ class CNC:
             mode = CNC.Mode.IDLE
         else:
             raise Exception(f"Invalid mode {choice.value.get()}")
+        self.modeSet(mode)
+        
+    def modeSet(self, mode):
+        """ This function is used to set the mode of the CNC."""
         self.arduino.writeValue("mode", str(mode.value))
 
     def pumpChange(self, slider):
@@ -332,7 +338,7 @@ class Gui:
         self.window.update_idletasks()
         self.window.update()
     def onClosing(self):
-        if tkmessagebox.askokcancel("Quit", "Sure?\nThis will also kill Lightburn/CarbideMotion."):
+        if tkmessagebox.askokcancel("Quit", "Exit the controller and close application ?"):
             self.window.destroy()
             self.window = None
 
@@ -342,18 +348,28 @@ class ManualGui(Gui):
     def __init__(self, cnc):
         super().__init__()
         self.window.title("CNC - Manual mode")
-        self.mode = MultiChoice(self.window, "Mode", 0, ["Idle", "Router", "Laser", "Manual"], cnc.modeChange)
-        self.spindle_on = OnOffToggle(self.window, "Spindle", 1, cnc.spindleToggle)
-        self.laser_on = OnOffToggle(self.window, "Laser", 2, cnc.laserToggle)
-        self.air_on = OnOffToggle(self.window, "Air", 4, cnc.airToggle)
-        self.vacuum_on = OnOffToggle(self.window, "Vacuum", 5, cnc.vacuumToggle)
-        self.hood_on = OnOffToggle(self.window, "Hood", 6, cnc.hoodToggle)
-        self.pump_speed = Slider(self.window, "Pump Speed", 7, 0, 100, cnc.pumpChange)
-        self.door_closed = OnOffToggle(self.window, "Door Closed", 9, None, read_only=True)
-        self.laser_present = OnOffToggle(self.window, "Laser Present", 10, None, read_only=True)
-        self.force_vacuum = OnOffToggle(self.window, "Force Vacuum Switch", 11, None, read_only=True)
-        self.air_pressure = Gauge(self.window, "Air Pressure", 12, 0, 100, 50)
-        self.pwm = Gauge(self.window, "PWM", 13, 0, 100, 50)
+        self.mode_frame = tk.LabelFrame(self.window, text="Mode")
+        self.mode_frame.grid(column=0, row=0, sticky=tk.W+tk.E, padx=10, pady=10)
+        self.mode = MultiChoice(self.mode_frame, "Mode", 0, ["Idle", "Router", "Laser", "Manual"], cnc.modeChange)
+        self.control = tk.LabelFrame(self.window, text="Control")
+        self.control.grid(column=0, row=1, sticky=tk.W+tk.E, padx=10, pady=10)
+        self.spindle_on = OnOffToggle(self.control, "Spindle", 0, cnc.spindleToggle)
+        self.laser_on = OnOffToggle(self.control, "Laser", 1, cnc.laserToggle)
+        self.air_on = OnOffToggle(self.control, "Air", 2, cnc.airToggle)
+        self.vacuum_on = OnOffToggle(self.control, "Vacuum", 3, cnc.vacuumToggle)
+        self.hood_on = OnOffToggle(self.control, "Hood", 4, cnc.hoodToggle)
+        self.pump_speed = Slider(self.control, "Pump Speed", 5, 0, 100, cnc.pumpChange)
+        self.status = tk.LabelFrame(self.window, text="Status")
+        self.status.grid(column=0, row=2, sticky=tk.W+tk.E, padx=10, pady=10)
+        self.onoff_status = tk.Frame(self.status)
+        self.onoff_status.grid(column=0, row=0, sticky=tk.W+tk.E, padx=10, pady=10)
+        self.door_closed = OnOffToggle(self.onoff_status, "Door Closed", 0, None, read_only=True)
+        self.laser_present = OnOffToggle(self.onoff_status, "Laser Present", 1, None, read_only=True)
+        self.force_vacuum = OnOffToggle(self.onoff_status, "Force Vacuum", 2, None, read_only=True)
+        self.gauge_status = tk.Frame(self.status)
+        self.gauge_status.grid(column=0, row=1, sticky=tk.W+tk.E, padx=10, pady=10)
+        self.air_pressure = Gauge(self.gauge_status, "Air Pressure", 0, 0, 0, 100, 30)
+        self.pwm = Gauge(self.gauge_status, "PWM", 0, 1, 0, 100, None)
 
 class LaserGui(Gui):
     """ This class is used to create the GUI for the CNC controller in laser mode."""
@@ -366,6 +382,30 @@ class LaserGui(Gui):
         self.air_on = OnOffToggle(self.control, "Air", 1, cnc.airToggle)
         self.vacuum_on = OnOffToggle(self.control, "Vacuum", 2, cnc.vacuumToggle)
         self.hood_on = OnOffToggle(self.control, "Hood", 3, cnc.hoodToggle)
+        self.status = tk.LabelFrame(self.window, text="Status")
+        self.status.grid(column=0, row=1, sticky=tk.W+tk.E, padx=10, pady=10)
+        self.onoff_status = tk.Frame(self.status)
+        self.onoff_status.grid(column=0, row=0, sticky=tk.W+tk.E, padx=10, pady=10)
+        self.door_closed = OnOffToggle(self.onoff_status, "Door Closed", 0, None, read_only=True)
+        self.laser_present = OnOffToggle(self.onoff_status, "Laser Present", 1, None, read_only=True)
+        self.force_vacuum = OnOffToggle(self.onoff_status, "Force Vacuum Switch", 2, None, read_only=True)
+        self.gauge_status = tk.Frame(self.status)
+        self.gauge_status.grid(column=0, row=1, sticky=tk.W+tk.E, padx=10, pady=10)
+        self.air_pressure = Gauge(self.gauge_status, "Air Pressure", 0, 0, 0, 100, 30)
+        self.pwm = Gauge(self.gauge_status, "PWM", 0, 1, 0, 100, None)
+
+class RouterGui(Gui):
+    """ This class is used to create the GUI for the CNC controller in router mode."""
+    def __init__(self, cnc):
+        super().__init__()
+        self.window.title("CNC - Laser mode")
+        self.control = tk.LabelFrame(self.window, text="Control")
+        self.control.grid(column=0, row=0, sticky=tk.W+tk.E, padx=10, pady=10)
+        self.spindle_on = OnOffToggle(self.control, "Spindle", 0, cnc.laserToggle)
+        self.air_on = OnOffToggle(self.control, "Air", 1, cnc.airToggle)
+        self.vacuum_on = OnOffToggle(self.control, "Vacuum", 2, cnc.vacuumToggle)
+        self.hood_on = OnOffToggle(self.control, "Hood", 3, cnc.hoodToggle)
+        self.pump_speed = Slider(self.control, "Pump Speed", 4, 0, 100, cnc.pumpChange)
         self.status = tk.LabelFrame(self.window, text="Status")
         self.status.grid(column=0, row=1, sticky=tk.W+tk.E, padx=10, pady=10)
         self.onoff_status = tk.Frame(self.status)
@@ -396,23 +436,34 @@ def runCNC():
     arg_parser.add_argument("--arduino_port", help="COM port connected to the Arduino board", default="COM7", type=str)
     mode_group = arg_parser.add_mutually_exclusive_group(required=True)
     mode_group.add_argument("--laser", help="Enable laser mode", action="store_true")
-    mode_group.add_argument("--cnc", help="Enable CNC mode", action="store_true")
+    mode_group.add_argument("--router", help="Enable router mode", action="store_true")
     mode_group.add_argument("--manual", help="Enable manual mode", action="store_true")
     arg_parser.add_argument("--lighburn_exec", help="Path to Lightburn executable", default="C:\\Program Files\\LightBurn\\LightBurn.exe", type=str)
     arg_parser.add_argument("--shapeoko_exec", help="Path to Shapeoko executable", default="C:\\Program Files (x86)\\Carbide\\carbidemotion.exe", type=str)
     args = arg_parser.parse_args()
 
-    # Depending on the mode, we will run the CNC or laser program
-    # We first kill any of these two that is running
-    if args.laser or args.cnc:
+    # In laser or CNC mode, we will access the GRBL controller, before we do that
+    # we need to kill any running Lightburn or Carbide Motion program
+    if args.laser or args.router:
         killProgramByName(os.path.basename(args.lighburn_exec))
         killProgramByName(os.path.basename(args.shapeoko_exec))
+        # Now we can open the ports
+        cnc = CNC(args.grbl_port, args.arduino_port)
+    else:
+        cnc = CNC(None, args.arduino_port)
 
-    # Then we connect to the arduino and grbl controllers
-    cnc = CNC(args.grbl_port, args.arduino_port)
 
     # Now what we do depends on the mode
+    if args.manual:
+        # Change mode
+        print("Configuring the GRBL controller to run in manual mode...")
+        cnc.modeSet(CNC.Mode.MANUAL)
+        # Create the GUI
+        cnc.gui = ManualGui(cnc)
+
     if args.laser:
+        print("Configuring the GRBL controller to run in laser mode...")
+        cnc.modeSet(CNC.Mode.LASER)
         # We first connect to the GRBL controller and make sure that we send the correct settings
         # Do not report anything back except status
         cnc.grbl.writeSettings(10, 0)
@@ -428,15 +479,15 @@ def runCNC():
         cnc.grbl.sendCommand("G10 L2 P1 X-845 Y-845")
         # Close the connection to the GRBL controller
         cnc.grbl.close()
-
         # Create the GUI
         cnc.gui = LaserGui(cnc)
-
         # Then we can open the Lightburn program
         print("Starting Lightburn...")
         cnc.process = subprocess.Popen(args.lighburn_exec)
 
-    if args.cnc:
+    if args.router:
+        print("Configuring the GRBL controller to run in Router mode...")
+        cnc.modeSet(CNC.Mode.ROUTER)
         # We first connect to the GRBL controller and make sure that we send the correct settings
         # Report everything back
         cnc.grbl.writeSettings(10, 255)
@@ -452,7 +503,8 @@ def runCNC():
         cnc.grbl.sendCommand("G10 L2 P1 X0 Y0")
         # Close the connection to the GRBL controller
         cnc.grbl.close()
-
+        # Create the GUI
+        cnc.gui = RouterGui(cnc)
         # Then we can open the Shapeoko program
         print("Starting Carbide Motion...")
         cnc.process = subprocess.Popen(args.shapeoko_exec)
