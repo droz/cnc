@@ -4,6 +4,7 @@ Depending if the laser head is connected, it will either run the CNC
 program (Shapeoko) or the laser program (Lightburn)."""
 
 import tkinter as tk
+import tkinter.messagebox as tkmessagebox
 import tkdial as tkdial
 import argparse
 import time
@@ -96,12 +97,14 @@ class Gauge:
     """ This is used to implement a simple linear dial indicator."""
     def __init__(self, window, text, row, min, max, nominal):
         self.window = window
-        self.value = tk.DoubleVar(window, 0)
-        self.meter = tkdial.Meter(window, start=min, end=max, radius = 100, width = 200, height = 200)
+        self.frame = tk.Frame(window)
+        self.frame.grid(column=0, row=row)
+        self.text = tk.Label(self.frame, text=text, font=("Arial", 18), anchor="center")
+        self.text.grid(column=0, row=0)
+        self.value = tk.DoubleVar(self.frame, 0)
+        self.meter = tkdial.Meter(self.frame, start=min, end=max, radius = 100, width = 200, height = 200)
         self.meter.set_mark(nominal - 10, nominal + 10, "green")
-        self.meter.grid(column=1, row=row, padx=10, pady=5)
-        self.text = tk.Label(window, text=text, font=("Arial", 18))
-        self.text.grid(column=0, row=row, padx=10, pady=5)
+        self.meter.grid(column=0, row=1)
 
     def update(self, value):
         self.meter.set(value)
@@ -109,6 +112,7 @@ class Gauge:
 class GrblInterface:
     """ This class is used to interface with the GRBL controller."""
     def __init__(self, port):
+        print(f"Connecting to GRBL controller on port {port}")
         self.serial = serial.Serial(port, 115200, timeout=60)
         self.wakeUp()
 
@@ -176,6 +180,7 @@ class GrblInterface:
 class ArduinoInterface:
     """ This class is used to interface with the Arduino board."""
     def __init__(self, port):
+        print(f"Connecting to Arduino board on port {port}")
         self.serial = serial.Serial(port, 115200, timeout=1)
         time.sleep(2)
 
@@ -215,9 +220,10 @@ class CNC:
 
     """ This is the main class used to keep track of the CNC state and interface to it"""
     def __init__(self, grbl_port, arduino_port):
-        #self.grbl = GrblInterface(grbl_port)
+        self.grbl = GrblInterface(grbl_port)
         self.arduino = ArduinoInterface(arduino_port)
         self.gui = None
+        self.process = None
 
     def update(self):
         # Read the status of the Arduino board
@@ -226,37 +232,37 @@ class CNC:
         # Update the UI if needed
         if not self.gui:
             return
-        if self.gui.mode is not None and "mode" in status:
+        if hasattr(self.gui, "mode") and "mode" in status:
             self.gui.mode.update(int(status["mode"]))
-        if self.gui.air_on is not None and "air" in status:
+        if hasattr(self.gui, "air_on") and "air" in status:
             self.gui.air_on.update(status["air"] == "1")
-        if self.gui.vacuum_on is not None and "vacuum" in status:
+        if hasattr(self.gui, "vacuum_on") and "vacuum" in status:
             self.gui.vacuum_on.update(status["vacuum"] == "1")
-        if self.gui.hood_on is not None and "hood" in status:
+        if hasattr(self.gui, "hood_on") and "hood" in status:
             self.gui.hood_on.update(status["hood"] == "1")
-        if self.gui.spindle_on is not None and "spindle" in status:
+        if hasattr(self.gui, "spindle_on") and "spindle" in status:
             self.gui.spindle_on.update(status["spindle"] == "1")
-        if self.gui.laser_on is not None and "laser" in status:
+        if hasattr(self.gui, "laser_on") and "laser" in status:
             self.gui.laser_on.update(status["laser"] == "1")
-        if self.gui.pump_speed is not None and "pump_interval_ms" in status:
+        if hasattr(self.gui, "pump_speed") and "pump_interval_ms" in status:
             pump_interval_ms = int(status["pump_interval_ms"])
             if pump_interval_ms == 0:
                 self.gui.pump_speed.value.set(0)
             else:
                 self.gui.pump_speed.value.set(200 / pump_interval_ms)
-        if self.gui.door_closed is not None and "door" in status:
+        if hasattr(self.gui, "door_closed") and "door" in status:
             self.gui.door_closed.update(status["door"] == "1")
-        if self.gui.laser_present is not None and "laser_head" in status:
+        if hasattr(self.gui, "laser_present") and "laser_head" in status:
             self.gui.laser_present.update(status["laser_head"] == "1")
-        if self.gui.force_vacuum is not None and "force_vacuum" in status:
+        if hasattr(self.gui, "force_vacuum") and "force_vacuum" in status:
             self.gui.force_vacuum.update(status["force_vacuum"] == "1")
-        if self.gui.air_pressure is not None and "pressure" in status:
+        if hasattr(self.gui, "air_pressure") and "pressure" in status:
             pressure_int = int(status["pressure"])
             pressure_psi = (pressure_int - 104.0) / 1024.0 * 100.0
             if pressure_psi < 0:
                 pressure_psi = 0
             self.gui.air_pressure.update(pressure_psi)
-        if self.gui.pwm is not None and "pwm" in status:
+        if hasattr(self.gui, "pwm") and "pwm" in status:
             self.gui.pwm.update(float(status["pwm"]) / 1024.0 * 100.0)
 
     def modeChange(self, choice):
@@ -316,10 +322,24 @@ class CNC:
         else:
             self.arduino.writeValue("laser", "0")
 
-class ManualGui:
+class Gui:
+    """ This class is used to create a GUI for the CNC controller. """
+    def __init__(self):
+        self.window = tk.Tk()
+        self.window.protocol("WM_DELETE_WINDOW", self.onClosing)
+    def update(self):
+        self.window.update_idletasks()
+        self.window.update()
+    def onClosing(self):
+        if tkmessagebox.askokcancel("Quit", "Sure?\nThis will also kill Lightburn/CarbideMotion."):
+            self.window.destroy()
+            self.window = None
+
+
+class ManualGui(Gui):
     """ This class is used to create the GUI for the CNC controller in manual mode."""
     def __init__(self, cnc):
-        self.window = tk.Tk()
+        super().__init__()
         self.window.title("CNC - Manual mode")
         self.mode = MultiChoice(self.window, "Mode", 0, ["Idle", "Router", "Laser", "Manual"], cnc.modeChange)
         self.spindle_on = OnOffToggle(self.window, "Spindle", 1, cnc.spindleToggle)
@@ -334,9 +354,24 @@ class ManualGui:
         self.air_pressure = Gauge(self.window, "Air Pressure", 12, 0, 100, 50)
         self.pwm = Gauge(self.window, "PWM", 13, 0, 100, 50)
 
-    def update(self):
-        self.window.update_idletasks()
-        self.window.update()
+class LaserGui(Gui):
+    """ This class is used to create the GUI for the CNC controller in laser mode."""
+    def __init__(self, cnc):
+        super().__init__()
+        self.window.title("CNC - Laser mode")
+        self.control = tk.LabelFrame(self.window, text="Control")
+        self.control.grid(column=0, row=0, sticky=tk.W+tk.E, padx=10, pady=10)
+        self.laser_on = OnOffToggle(self.control, "Laser", 2, cnc.laserToggle)
+        self.air_on = OnOffToggle(self.control, "Air", 4, cnc.airToggle)
+        self.vacuum_on = OnOffToggle(self.control, "Vacuum", 5, cnc.vacuumToggle)
+        self.hood_on = OnOffToggle(self.control, "Hood", 6, cnc.hoodToggle)
+        self.status = tk.LabelFrame(self.window, text="Status")
+        self.status.grid(column=0, row=1, sticky=tk.W+tk.E, padx=10, pady=10)
+        self.door_closed = OnOffToggle(self.status, "Door Closed", 9, None, read_only=True)
+        self.laser_present = OnOffToggle(self.status, "Laser Present", 10, None, read_only=True)
+        self.force_vacuum = OnOffToggle(self.status, "Force Vacuum Switch", 11, None, read_only=True)
+        self.air_pressure = Gauge(self.window, "Air Pressure", 12, 0, 100, 50)
+        self.pwm = Gauge(self.window, "PWM", 13, 0, 100, 50)
 
 def killProgramByName(name):
     """ This function is used to kill a specific controller program.
@@ -389,8 +424,13 @@ def runCNC():
         # Close the connection to the GRBL controller
         cnc.grbl.close()
 
+        # Create the GUI
+        cnc.gui = LaserGui(cnc)
+
         # Then we can open the Lightburn program
-        lighburn_process = subprocess.Popen(args.lighburn_exec)
+        print("Starting Lightburn...")
+        cnc.process = subprocess.Popen(args.lighburn_exec)
+
     if args.cnc:
         # We first connect to the GRBL controller and make sure that we send the correct settings
         # Report everything back
@@ -409,7 +449,25 @@ def runCNC():
         cnc.grbl.close()
 
         # Then we can open the Shapeoko program
-        shapeoko_process = subprocess.Popen(args.shapeoko_exec)
+        print("Starting Carbide Motion...")
+        cnc.process = subprocess.Popen(args.shapeoko_exec)
+
+    # Main loop
+    while True:
+        # Update the CNC controller
+        cnc.update()
+        # Update the GUI
+        cnc.gui.update()
+        if not cnc.gui.window:
+            break
+        # Check that the associated process is still running
+        if cnc.process and cnc.process.poll() is not None:
+            break
+
+    # Clsoe the associated process if it is still running
+    if cnc.process:
+        cnc.process.kill()
+
     return
 
     settings = cnc.grbl.readSettings()
@@ -429,11 +487,6 @@ def runCNC():
     # Create the GUI
     gui = ManualGui(cnc)
     cnc.gui = gui
-
-    # Main loop
-    while True:
-        cnc.update()
-        gui.update()
 
 if __name__ == '__main__':
     sys.exit(runCNC())
