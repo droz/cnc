@@ -95,15 +95,16 @@ class Slider:
 
 class Gauge:
     """ This is used to implement a simple linear dial indicator."""
-    def __init__(self, window, text, row, min, max, nominal):
+    def __init__(self, window, text, row, column, min, max, nominal):
         self.window = window
         self.frame = tk.Frame(window)
-        self.frame.grid(column=0, row=row)
+        self.frame.grid(column=column, row=row, padx=10, pady=5)
         self.text = tk.Label(self.frame, text=text, font=("Arial", 18), anchor="center")
         self.text.grid(column=0, row=0)
         self.value = tk.DoubleVar(self.frame, 0)
-        self.meter = tkdial.Meter(self.frame, start=min, end=max, radius = 100, width = 200, height = 200)
-        self.meter.set_mark(nominal - 10, nominal + 10, "green")
+        self.meter = tkdial.Meter(self.frame, start=min, end=max, radius = 150, width = 152, height = 152)
+        if nominal:
+            self.meter.set_mark(nominal - 10, nominal + 10, "green")
         self.meter.grid(column=0, row=1)
 
     def update(self, value):
@@ -361,17 +362,21 @@ class LaserGui(Gui):
         self.window.title("CNC - Laser mode")
         self.control = tk.LabelFrame(self.window, text="Control")
         self.control.grid(column=0, row=0, sticky=tk.W+tk.E, padx=10, pady=10)
-        self.laser_on = OnOffToggle(self.control, "Laser", 2, cnc.laserToggle)
-        self.air_on = OnOffToggle(self.control, "Air", 4, cnc.airToggle)
-        self.vacuum_on = OnOffToggle(self.control, "Vacuum", 5, cnc.vacuumToggle)
-        self.hood_on = OnOffToggle(self.control, "Hood", 6, cnc.hoodToggle)
+        self.laser_on = OnOffToggle(self.control, "Laser", 0, cnc.laserToggle)
+        self.air_on = OnOffToggle(self.control, "Air", 1, cnc.airToggle)
+        self.vacuum_on = OnOffToggle(self.control, "Vacuum", 2, cnc.vacuumToggle)
+        self.hood_on = OnOffToggle(self.control, "Hood", 3, cnc.hoodToggle)
         self.status = tk.LabelFrame(self.window, text="Status")
         self.status.grid(column=0, row=1, sticky=tk.W+tk.E, padx=10, pady=10)
-        self.door_closed = OnOffToggle(self.status, "Door Closed", 9, None, read_only=True)
-        self.laser_present = OnOffToggle(self.status, "Laser Present", 10, None, read_only=True)
-        self.force_vacuum = OnOffToggle(self.status, "Force Vacuum Switch", 11, None, read_only=True)
-        self.air_pressure = Gauge(self.window, "Air Pressure", 12, 0, 100, 50)
-        self.pwm = Gauge(self.window, "PWM", 13, 0, 100, 50)
+        self.onoff_status = tk.Frame(self.status)
+        self.onoff_status.grid(column=0, row=0, sticky=tk.W+tk.E, padx=10, pady=10)
+        self.door_closed = OnOffToggle(self.onoff_status, "Door Closed", 0, None, read_only=True)
+        self.laser_present = OnOffToggle(self.onoff_status, "Laser Present", 1, None, read_only=True)
+        self.force_vacuum = OnOffToggle(self.onoff_status, "Force Vacuum Switch", 2, None, read_only=True)
+        self.gauge_status = tk.Frame(self.status)
+        self.gauge_status.grid(column=0, row=1, sticky=tk.W+tk.E, padx=10, pady=10)
+        self.air_pressure = Gauge(self.gauge_status, "Air Pressure", 0, 0, 0, 100, 30)
+        self.pwm = Gauge(self.gauge_status, "PWM", 0, 1, 0, 100, None)
 
 def killProgramByName(name):
     """ This function is used to kill a specific controller program.
@@ -467,26 +472,6 @@ def runCNC():
     # Clsoe the associated process if it is still running
     if cnc.process:
         cnc.process.kill()
-
-    return
-
-    settings = cnc.grbl.readSettings()
-    print("GRBL settings:")
-    print(settings)
- 
-
-
-    # settings = cnc.grbl.readSettings()
-    # print("GRBL settings:")
-    # print(settings)
-    # cnc.grbl.close()
-    status = cnc.arduino.readStatus()
-    print("Arduino status:")
-    print(status)
-
-    # Create the GUI
-    gui = ManualGui(cnc)
-    cnc.gui = gui
 
 if __name__ == '__main__':
     sys.exit(runCNC())
