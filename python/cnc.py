@@ -398,10 +398,10 @@ class RouterGui(Gui):
     """ This class is used to create the GUI for the CNC controller in router mode."""
     def __init__(self, cnc):
         super().__init__()
-        self.window.title("CNC - Laser mode")
+        self.window.title("CNC - Router mode")
         self.control = tk.LabelFrame(self.window, text="Control")
         self.control.grid(column=0, row=0, sticky=tk.W+tk.E, padx=10, pady=10)
-        self.spindle_on = OnOffToggle(self.control, "Spindle", 0, cnc.laserToggle)
+        self.spindle_on = OnOffToggle(self.control, "Spindle", 0, cnc.spindleToggle)
         self.air_on = OnOffToggle(self.control, "Air", 1, cnc.airToggle)
         self.vacuum_on = OnOffToggle(self.control, "Vacuum", 2, cnc.vacuumToggle)
         self.hood_on = OnOffToggle(self.control, "Hood", 3, cnc.hoodToggle)
