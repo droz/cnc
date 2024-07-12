@@ -305,8 +305,8 @@ class ManualGui:
         self.door_closed = OnOffToggle(self.window, "Door Closed", 9, None, read_only=True)
         self.laser_present = OnOffToggle(self.window, "Laser Present", 10, None, read_only=True)
         self.force_vacuum = OnOffToggle(self.window, "Force Vacuum Switch", 11, None, read_only=True)
-        self.air_pressure = Gauge(self.window, "Air Pressure", 12, 0, 100, 50)
-        self.pwm = Gauge(self.window, "PWM", 13, 0, 100, 50)
+        self.air_pressure = Gauge(self.window, "Air Pressure", 12, 0, 100, 30)
+        self.pwm = Gauge(self.window, "PWM", 13, 0, 100, 90)
 
     def update(self):
         self.window.update_idletasks()

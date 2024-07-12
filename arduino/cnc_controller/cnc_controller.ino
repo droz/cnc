@@ -29,6 +29,13 @@
 #define SPINDLE_OFF_TO_VACUUM_OFF_MS 10000
 // spindle off to mist off
 #define SPINDLE_OFF_TO_MIST_OFF_MS 3000
+// delay after which we check the air pressure
+#define AIR_PRESSURE_CHECK_DELAY_MS 1000
+
+// Minimum air pressure for the laser
+#define MIN_AIR_PRESSURE 309
+// Maximum air pressure for the laser
+#define MAX_AIR_PRESSURE 513
 
 // The LED strip
 CRGB leds[NUM_LEDS];
@@ -53,6 +60,8 @@ static MachineMode mode = MODE_IDLE;
 static int32_t mode_set_time = LONG_MIN;
 // This is the last time at which the laser was on
 static int32_t laser_on_time = LONG_MIN;
+// This is the last time at which the air was off
+static int32_t air_off_time = LONG_MIN;
 // This is the last time at which the spindle was on
 static int32_t spindle_on_time = LONG_MIN;
 // This is the last time at which we ran the main loop
@@ -273,6 +282,11 @@ void loop() {
   if (laser_is_on) {
     laser_on_time = now;
   }
+  // This tells us when the air was last off
+  bool air_is_off = !digitalRead(PIN_AIR);
+  if (air_is_off) {
+    air_off_time = now;
+  }
   // This tells us when the spindle was last on
   bool spindle_is_on = digitalRead(PIN_SPINDLE) && analogRead(PIN_PWM);
   if (spindle_is_on) {
@@ -290,12 +304,17 @@ void loop() {
   }
   // - If we are in laser mode,
   if (mode == MODE_LASER) {
-    // The laser should be on when the door is closed
-    if (digitalRead(PIN_DOOR)) {
-      digitalWrite(PIN_LASER, LOW);
-    } else {
-      digitalWrite(PIN_LASER, HIGH);
+    int laser_pin = HIGH;
+    // The laser should be on only when the door is closed and the laser head is present
+    if (digitalRead(PIN_DOOR) || digitalRead(PIN_LASER_HEAD)) {
+      laser_pin = LOW;
     }
+    // The air pressure should be correct when the laser is on (after a short delay)
+    if (digitalRead(PIN_AIR) && ((now - air_off_time) >= AIR_PRESSURE_CHECK_DELAY_MS) && (analogRead(PIN_PRESSURE) < MIN_AIR_PRESSURE || analogRead(PIN_PRESSURE) > MAX_AIR_PRESSURE)) {
+      laser_pin = LOW;
+    }
+    // Actually write the laser pin
+    digitalWrite(PIN_LASER, laser_pin);
     // The air and the hood should be on when the laser is on
     if (laser_is_on) {
       digitalWrite(PIN_AIR, HIGH);
@@ -308,6 +327,7 @@ void loop() {
     if ((now - laser_on_time) >= LASER_OFF_TO_HOOD_OFF_MS && (last_loop_time - laser_on_time) < LASER_OFF_TO_HOOD_OFF_MS) {
       digitalWrite(PIN_HOOD, LOW);
     }
+
   }
 
   last_loop_time = now;
