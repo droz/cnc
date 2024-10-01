@@ -49,6 +49,14 @@ typedef enum {
 } MachineMode;
 static MachineMode mode = MODE_IDLE;
 
+// The error code that we are currently in
+typedef enum {
+  ERROR_NONE = 0,
+  ERROR_LOW_AIR_PRESSURE = 1,
+  ERROR_LASER_HEAD_MISSING = 2,
+} MachineError;
+static MachineError error = ERROR_NONE;
+
 // This is the last time at which the mode was set by the computer
 static int32_t mode_set_time = LONG_MIN;
 // This is the last time at which the laser was on
@@ -278,16 +286,25 @@ void loop() {
   if (spindle_is_on) {
     spindle_on_time = now;
   }
+  // This tells us when the air was last on
+  bool air_is_on = digitalRead(PIN_AIR);
+
+
 
   // There are some things that we want to enforce. This is done here:
-  // - If we are not in router mode, the spindle should be off
-  if (mode != MODE_ROUTER) {
+  // - If we are not in router mode (or manual mode), the spindle should be off
+  if (mode != MODE_ROUTER && mode != MODE_MANUAL) {
     digitalWrite(PIN_SPINDLE, LOW);
   }
-  // - If we are not in laser mode, the laser should be off
-  if (mode != MODE_LASER) {
+  // - If we are not in laser mode (or manual mode), the laser should be off
+  if (mode != MODE_LASER && mode != MODE_MANUAL) {
     digitalWrite(PIN_LASER, LOW);
   }
+  // - If we triggered any error, the laser should be off
+  if (error != ERROR_NONE) {
+    digitalWrite(PIN_LASER, LOW);
+  }
+
   // - If we are in laser mode,
   if (mode == MODE_LASER) {
     // The laser should be on when the door is closed
