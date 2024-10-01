@@ -4,34 +4,108 @@
 
 #include <limits.h>
 
-#define PIN_LEDS 4
-#define PIN_SPINDLE A0
-#define PIN_LASER A1
-#define PIN_AIR 13
-#define PIN_PRESSURE A6
-#define PIN_PUMP_ENA 8
-#define PIN_PUMP_DIR 7
-#define PIN_PUMP_STEP 6
-#define PIN_PWM A2
-#define PIN_DOOR 9
-#define PIN_LASER_HEAD 12
-#define PIN_VACUUM 11
-#define PIN_VACUUM_FORCE 2
-#define PIN_HOOD 10
-#define NUM_LEDS 3
-
 // Various delays, all in ms
 // laser off to air off
 #define LASER_OFF_TO_AIR_OFF_MS 5000
 // laser off to hood off
 #define LASER_OFF_TO_HOOD_OFF_MS 240000
+// spindle off to hood off
+#define SPINDLE_OFF_TO_HOOD_OFF_MS 6000
 // spindle off to vacuum off
 #define SPINDLE_OFF_TO_VACUUM_OFF_MS 10000
 // spindle off to mist off
 #define SPINDLE_OFF_TO_MIST_OFF_MS 3000
+// delay after which we check the air pressure
+#define AIR_PRESSURE_CHECK_DELAY_MS 1000
+
+// Minimum air pressure for the laser
+#define MIN_AIR_PRESSURE 309
+// Maximum air pressure for the laser
+#define MAX_AIR_PRESSURE 513
+
+// Pin mapping
+#define PIN_LEDS         4
+#define PIN_SPINDLE      A0
+#define PIN_LASER        A1
+#define PIN_AIR          13
+#define PIN_PRESSURE     A6
+#define PIN_PUMP_ENA     8
+#define PIN_PUMP_DIR     7
+#define PIN_PUMP_STEP    6
+#define PIN_PWM          A2
+#define PIN_DOOR         9
+#define PIN_LASER_HEAD   12
+#define PIN_VACUUM       11
+#define PIN_VACUUM_FORCE 2
+#define PIN_HOOD         10
 
 // The LED strip
+#define NUM_LEDS         3
 CRGB leds[NUM_LEDS];
+
+// These structures are used to track the status and history of some variables
+class OnOffVariable {
+ public:
+  OnOffVariable() {
+    last_state_ = false;
+    last_off_on_time_ = LONG_MIN;
+    last_on_off_time_ = LONG_MIN;
+  }
+
+  void update(bool new_state) {
+    uint32_t now = millis();
+    last_state_ = state_;
+    if (new_state != state_) {
+      if (new_state) {
+        last_off_on_time_ = now;
+      } else {
+        last_on_off_time_ = now;
+      }
+      state_ = new_state;
+    }
+  }
+
+  bool hasBeenOnFor(uint32_t duration_ms) {
+    if(!state_) {
+      return false;
+    }
+    if (last_on_off_time_ == LONG_MIN) {
+      return false;
+    }
+    return (millis() - last_off_on_time_) >= duration_ms;
+  }
+
+  bool hasBeenOffFor(uint32_t duration_ms) {
+    if(state_) {
+      return false;
+    }
+    if (last_off_on_time_ == LONG_MIN) {
+      return false;
+    }
+    return (millis() - last_on_off_time_) >= duration_ms;
+  }
+
+  bool isOn() {
+    return state_;
+  }
+
+  bool justTurnedOn() {
+    return state_ && !last_state_;
+  }
+
+ private:
+  int32_t last_off_on_time_;
+  int32_t last_on_off_time_;
+  bool state_;
+  bool last_state_;
+};
+
+// Laser status
+static OnOffVariable laser_status;
+// Spindle status
+static OnOffVariable spindle_status;
+// Air status
+static OnOffVariable air_status;
 
 // The buffer that contains the current command
 static const int CMD_BUFFER_MAX_SIZE = 64;
@@ -42,29 +116,40 @@ int pump_interval_ms = 0;
 
 // The mode in which we operate the machine
 typedef enum {
+  // IDLE: Nothing should happen
   MODE_IDLE = 0,
+  // Router: Laser cannot be used, spindle can be used
   MODE_ROUTER = 1,
+  // Laser: Laser can be used, spindle cannot be used
   MODE_LASER = 2,
+  // Manual: Everything can be used
   MODE_MANUAL = 3
-} MachineMode;
-static MachineMode mode = MODE_IDLE;
+} Mode;
+static Mode mode = MODE_IDLE;
 
-// The error code that we are currently in
+// The submode in which we operate the machine
 typedef enum {
-  ERROR_NONE = 0,
-  ERROR_LOW_AIR_PRESSURE = 1,
-  ERROR_LASER_HEAD_MISSING = 2,
-} MachineError;
-static MachineError error = ERROR_NONE;
+  // NOTHING: Nothing should happen
+  SUBMODE_NOTHING = 0,
+  // AIR: Air is on
+  SUBMODE_AIR = 1,
+  // PUMP: Pump is on
+  SUBMODE_PUMP = 2,
+  // VACUUUM: Vacuum is on
+  SUBMODE_VACUUM = 4
+} Submode;
+static uint16_t submode = SUBMODE_NOTHING;
 
-// This is the last time at which the mode was set by the computer
-static int32_t mode_set_time = LONG_MIN;
-// This is the last time at which the laser was on
-static int32_t laser_on_time = LONG_MIN;
-// This is the last time at which the spindle was on
-static int32_t spindle_on_time = LONG_MIN;
-// This is the last time at which we ran the main loop
-static int32_t last_loop_time = LONG_MIN;
+// The error codes
+typedef enum {
+  ERROR_NONE               = 0,
+  ERROR_LOW_AIR_PRESSURE   = 1,
+  ERROR_HIGH_AIR_PRESSURE  = 2,
+  ERROR_LASER_HEAD_MISSING = 4,
+  ERROR_LASER_HEAD_PRESENT = 8,
+  ERROR_DOOR_OPEN          = 16,
+} MachineError;
+static uint16_t error = ERROR_NONE;
 
 static String debug = "";
 
@@ -115,20 +200,32 @@ void setup() {
 
 }
 
+// One step of the pump stepper motor
 void pumpStep() {
   digitalWrite(PIN_PUMP_STEP, HIGH);
   digitalWrite(PIN_PUMP_STEP, LOW);
 }
 
+// Update the pump speed
+void updatePumpSpeed(int pump_interval_ms) {
+    if (pump_interval_ms == 0) {
+      ITimer1.stopTimer();
+    } else {
+      ITimer1.setInterval(pump_interval_ms, pumpStep);
+    }
+}
+
+// Send "done" to the computer
 void sendDone() {
   Serial.println("done");
 }
 
+// Process the command in the serial buffer
 void processCmd() {
-  // Process the command in the buffer
   if (cmd_buffer.startsWith("status")) {
     // Send status
     Serial.println("mode=" + String(mode));
+    Serial.println("submode=" + String(submode));
     Serial.println("door=" + String(!digitalRead(PIN_DOOR)));
     Serial.println("laser_head=" + String(!digitalRead(PIN_LASER_HEAD)));
     Serial.println("force_vacuum=" + String(!digitalRead(PIN_VACUUM_FORCE)));
@@ -140,9 +237,11 @@ void processCmd() {
     Serial.println("laser=" + String(digitalRead(PIN_LASER)));
     Serial.println("air=" + String(digitalRead(PIN_AIR)));
     Serial.println("pump_interval_ms=" + String(pump_interval_ms));
+    Serial.println("pump_enable=" + String(!digitalRead(PIN_PUMP_ENA)));
     Serial.println("led0=" + String(leds[0].r) + "," + String(leds[0].g) + "," + String(leds[0].b));
     Serial.println("led1=" + String(leds[1].r) + "," + String(leds[1].g) + "," + String(leds[1].b));
     Serial.println("led2=" + String(leds[2].r) + "," + String(leds[2].g) + "," + String(leds[2].b));
+    Serial.println("error=" + String(error));
     Serial.println("debug=" + debug);
     return;
   }
@@ -151,8 +250,7 @@ void processCmd() {
     int new_mode;
     sscanf(cmd_buffer.c_str(), "mode=%d", &new_mode);
     if (new_mode == MODE_IDLE || new_mode == MODE_LASER || new_mode == MODE_ROUTER || new_mode == MODE_MANUAL) {
-      mode = (MachineMode)new_mode;
-      mode_set_time = millis();
+      mode = (Mode)new_mode;
       sendDone();
     } else {
       Serial.println("args_error");
@@ -162,6 +260,14 @@ void processCmd() {
   // If we are in IDLE mode, then all other commands are ignored
   if (mode == MODE_IDLE) {
     Serial.println("unknown");
+    return;
+  }
+  if (cmd_buffer.startsWith("submode=")) {
+    // Set submode
+    int new_submode;
+    sscanf(cmd_buffer.c_str(), "submode=%d", &new_submode);
+    submode = new_submode;
+    sendDone();
     return;
   }
   if (cmd_buffer.startsWith("led0=")) {
@@ -234,18 +340,19 @@ void processCmd() {
   if (cmd_buffer.startsWith("pump_interval_ms=")) {
     // Set Pump Speed
     sscanf(cmd_buffer.c_str(), "pump_interval_ms=%d", &pump_interval_ms);
-    if (pump_interval_ms == 0) {
-      digitalWrite(PIN_PUMP_ENA, HIGH);
-      ITimer1.stopTimer();
-      sendDone();
+    if (pump_interval_ms < 0 || pump_interval_ms > 1000) {
+      Serial.println("args_error");
       return;
     }
-    if (pump_interval_ms < 0 || pump_interval_ms > 1000) {
-      digitalWrite(PIN_PUMP_ENA, HIGH);
-      Serial.println("args_error");
-    }
-    digitalWrite(PIN_PUMP_ENA, LOW);
-    ITimer1.setInterval(pump_interval_ms, pumpStep);
+    updatePumpSpeed(pump_interval_ms);
+    sendDone();
+    return;
+  }
+  if (cmd_buffer.startsWith("pump_enable=")) {
+    // Set Pump enable
+    int state;
+    sscanf(cmd_buffer.c_str(), "pump_enable=%d", &state);
+    digitalWrite(PIN_PUMP_ENA, !state);
     sendDone();
     return;
   }
@@ -276,56 +383,124 @@ void loop() {
   }
   FastLED.show();
 
-  // This tells us when the laser was last on
-  bool laser_is_on = digitalRead(PIN_LASER) && analogRead(PIN_PWM);
-  if (laser_is_on) {
-    laser_on_time = now;
+  // If we are in manual mode, we can skip all the following checks and automation
+  if (mode == MODE_MANUAL) {
+    return;
   }
-  // This tells us when the spindle was last on
-  bool spindle_is_on = digitalRead(PIN_SPINDLE) && analogRead(PIN_PWM);
-  if (spindle_is_on) {
-    spindle_on_time = now;
-  }
-  // This tells us when the air was last on
-  bool air_is_on = digitalRead(PIN_AIR);
 
-
-
-  // There are some things that we want to enforce. This is done here:
-  // - If we are not in router mode (or manual mode), the spindle should be off
-  if (mode != MODE_ROUTER && mode != MODE_MANUAL) {
+  // If we are in IDLE mode, everything should be off and we can also skip all the following checks
+  if (mode == MODE_IDLE) {
     digitalWrite(PIN_SPINDLE, LOW);
-  }
-  // - If we are not in laser mode (or manual mode), the laser should be off
-  if (mode != MODE_LASER && mode != MODE_MANUAL) {
     digitalWrite(PIN_LASER, LOW);
+    digitalWrite(PIN_AIR, LOW);
+    digitalWrite(PIN_VACUUM, LOW);
+    digitalWrite(PIN_HOOD, LOW);
+    updatePumpSpeed(0);
+    ITimer1.stopTimer();
+    return;
   }
-  // - If we triggered any error, the laser should be off
-  if (error != ERROR_NONE) {
-    digitalWrite(PIN_LASER, LOW);
-  }
+
+  // Update some variables
+  laser_status.update(digitalRead(PIN_LASER) && analogRead(PIN_PWM));
+  spindle_status.update(digitalRead(PIN_SPINDLE) && analogRead(PIN_PWM));
+  air_status.update(digitalRead(PIN_AIR));
 
   // - If we are in laser mode,
   if (mode == MODE_LASER) {
-    // The laser should be on when the door is closed
-    if (digitalRead(PIN_DOOR)) {
-      digitalWrite(PIN_LASER, LOW);
-    } else {
-      digitalWrite(PIN_LASER, HIGH);
-    }
-    // The air and the hood should be on when the laser is on
-    if (laser_is_on) {
-      digitalWrite(PIN_AIR, HIGH);
+    // The spindle should be OFF
+    digitalWrite(PIN_SPINDLE, LOW);
+
+    // The pump should be OFF
+    digitalWrite(PIN_PUMP_ENA, HIGH);
+
+    // The vacuum should be OFF
+    digitalWrite(PIN_VACUUM, LOW);
+
+    // The hood and air should be ON when the laser is on
+    if (laser_status.isOn()) {
       digitalWrite(PIN_HOOD, HIGH);
+      digitalWrite(PIN_AIR, HIGH);
     }
-    // We can turn off the air and hood some time after the laser turns off
-    if ((now - laser_on_time) >= LASER_OFF_TO_AIR_OFF_MS && (last_loop_time - laser_on_time) < LASER_OFF_TO_AIR_OFF_MS) {
-      digitalWrite(PIN_AIR, LOW);
+
+    // The door should be closed
+    if (digitalRead(PIN_DOOR)) {
+      error |= ERROR_DOOR_OPEN;
     }
-    if ((now - laser_on_time) >= LASER_OFF_TO_HOOD_OFF_MS && (last_loop_time - laser_on_time) < LASER_OFF_TO_HOOD_OFF_MS) {
-      digitalWrite(PIN_HOOD, LOW);
+    // The laser head should be present
+    if (digitalRead(PIN_LASER_HEAD)) {
+      error |= ERROR_LASER_HEAD_MISSING;
+    }
+    // We can turn the laser on only if we are free of errors
+    if (error == ERROR_NONE) {
+      digitalWrite(PIN_LASER, HIGH);
+    } else {
+      digitalWrite(PIN_LASER, LOW);
     }
   }
 
-  last_loop_time = now;
+  // - If we are in router mode,
+  if (mode == MODE_ROUTER) {
+    // The laser should be OFF
+    digitalWrite(PIN_LASER, LOW);
+
+    // The pump should be ON when the spindle is on and the user requested it
+    // We also turn the hood and the air on
+    if (spindle_status.isOn() && (submode & SUBMODE_PUMP)) {
+      digitalWrite(PIN_PUMP_ENA, LOW);
+      digitalWrite(PIN_HOOD, HIGH);
+      digitalWrite(PIN_AIR, HIGH);
+    }
+
+    // The vacuum should be ON when the spindle is on and the user requested it
+    if (spindle_status.isOn() && (submode & SUBMODE_VACUUM)) {
+      digitalWrite(PIN_VACUUM, HIGH);
+    }
+
+    // The air should be ON when the spindle is on and the user requested it
+    if (spindle_status.isOn() && (submode & SUBMODE_AIR)) {
+      digitalWrite(PIN_AIR, HIGH);
+    }
+
+    // We don't care about the door
+    // The laser head should not be present
+    if (!digitalRead(PIN_LASER_HEAD)) {
+      error |= ERROR_LASER_HEAD_PRESENT;
+    }
+    // We can turn the spindle on only if we are free of errors
+    if (error == ERROR_NONE) {
+      digitalWrite(PIN_SPINDLE, HIGH);
+    } else {
+      digitalWrite(PIN_SPINDLE, LOW);
+    }
+  }
+
+  // Check that the air pressure is correct when the air is on
+  if (air_status.hasBeenOnFor(AIR_PRESSURE_CHECK_DELAY_MS)) {
+    if (analogRead(PIN_PRESSURE) < MIN_AIR_PRESSURE) {
+      error = ERROR_LOW_AIR_PRESSURE;
+    }
+    if (analogRead(PIN_PRESSURE) > MAX_AIR_PRESSURE) {
+      error = ERROR_HIGH_AIR_PRESSURE;
+    }
+  }
+
+  // After a while, we can turn off the air and the pump
+  if (spindle_status.hasBeenOffFor(SPINDLE_OFF_TO_VACUUM_OFF_MS) &&
+      laser_status.hasBeenOffFor(SPINDLE_OFF_TO_VACUUM_OFF_MS) ) {
+    digitalWrite(PIN_AIR, LOW);
+    digitalWrite(PIN_PUMP_ENA, HIGH);
+  }
+
+  // After a while, we can turn off the hood
+  if (laser_status.hasBeenOffFor(LASER_OFF_TO_HOOD_OFF_MS) &&
+      spindle_status.hasBeenOffFor(SPINDLE_OFF_TO_HOOD_OFF_MS) ) {
+    digitalWrite(PIN_HOOD, LOW);
+  }
+
+  // After a while, we can turn off the vacuum
+  if (spindle_status.hasBeenOffFor(SPINDLE_OFF_TO_VACUUM_OFF_MS)) {
+    digitalWrite(PIN_VACUUM, LOW);
+  }
+
+
 }

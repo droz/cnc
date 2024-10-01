@@ -58,6 +58,30 @@ class OnOffToggle:
         self.update(self.state)
         self.callback(self)
 
+
+class ErrorText:
+    """ This is used to implement a simple Error text indicator."""
+    def __init__(self, window, title, row):
+        self.window = window
+        self.frame = tk.LabelFrame(self.window, text="Error")
+        self.frame.grid(column=0, row=row, sticky=tk.W+tk.E, padx=10, pady=10)
+        self.text = tk.Label(self.frame, text="", font=("Arial", 18, "bold"))
+        self.text.grid(column=0, row=0, padx=10, pady=5)
+
+    def update(self, value):
+        str = ""
+        if value & 1:
+            str += "Air pressure too low\n"
+        if value & 2:
+            str += "Air pressure too high\n"
+        if value & 4:
+            str += "Laser head missing\n"
+        if value & 8:
+            str += "Laser head present\n"
+        if value & 16:
+            str += "Door open\n"
+        self.text.config(text=value)
+
 class MultiChoice:
     """ This is used to implement a simple multi-choice button."""
     def __init__(self, window, text, row, choices, callback):
@@ -267,6 +291,8 @@ class CNC:
             self.gui.air_pressure.update(pressure_psi)
         if hasattr(self.gui, "pwm") and "pwm" in status:
             self.gui.pwm.update(float(status["pwm"]) / 1024.0 * 100.0)
+        if hasattr(self.gui, "error") and "error" in status:
+            self.gui.error.update(int(status["error"]))
 
     def modeChange(self, choice):
         """ This function is used to change the mode of the CNC."""
@@ -342,7 +368,6 @@ class Gui:
             self.window.destroy()
             self.window = None
 
-
 class ManualGui(Gui):
     """ This class is used to create the GUI for the CNC controller in manual mode."""
     def __init__(self, cnc):
@@ -384,13 +409,14 @@ class LaserGui(Gui):
         self.hood_on = OnOffToggle(self.control, "Hood", 3, cnc.hoodToggle)
         self.status = tk.LabelFrame(self.window, text="Status")
         self.status.grid(column=0, row=1, sticky=tk.W+tk.E, padx=10, pady=10)
+        self.error = ErrorText(self.status, "Error", 0)
         self.onoff_status = tk.Frame(self.status)
-        self.onoff_status.grid(column=0, row=0, sticky=tk.W+tk.E, padx=10, pady=10)
+        self.onoff_status.grid(column=0, row=1, sticky=tk.W+tk.E, padx=10, pady=10)
         self.door_closed = OnOffToggle(self.onoff_status, "Door Closed", 0, None, read_only=True)
         self.laser_present = OnOffToggle(self.onoff_status, "Laser Present", 1, None, read_only=True)
         self.force_vacuum = OnOffToggle(self.onoff_status, "Force Vacuum Switch", 2, None, read_only=True)
         self.gauge_status = tk.Frame(self.status)
-        self.gauge_status.grid(column=0, row=1, sticky=tk.W+tk.E, padx=10, pady=10)
+        self.gauge_status.grid(column=0, row=2, sticky=tk.W+tk.E, padx=10, pady=10)
         self.air_pressure = Gauge(self.gauge_status, "Air Pressure", 0, 0, 0, 100, 30)
         self.pwm = Gauge(self.gauge_status, "PWM", 0, 1, 0, 100, None)
 
