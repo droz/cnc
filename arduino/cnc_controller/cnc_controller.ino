@@ -43,10 +43,14 @@
 #define NUM_LEDS         3
 CRGB leds[NUM_LEDS];
 
+// A debug string
+static String debug = "";
+
 // These structures are used to track the status and history of some variables
 class OnOffVariable {
  public:
-  OnOffVariable() {
+  OnOffVariable(const String& name) {
+    name_ = name;
     last_state_ = false;
     last_off_on_time_ = LONG_MIN;
     last_on_off_time_ = LONG_MIN;
@@ -69,8 +73,8 @@ class OnOffVariable {
     if(!state_) {
       return false;
     }
-    if (last_on_off_time_ == LONG_MIN) {
-      return false;
+    if (last_off_on_time_ == LONG_MIN) {
+      return true;
     }
     return (millis() - last_off_on_time_) >= duration_ms;
   }
@@ -79,8 +83,8 @@ class OnOffVariable {
     if(state_) {
       return false;
     }
-    if (last_off_on_time_ == LONG_MIN) {
-      return false;
+    if (last_on_off_time_ == LONG_MIN) {
+      return true;
     }
     return (millis() - last_on_off_time_) >= duration_ms;
   }
@@ -94,6 +98,7 @@ class OnOffVariable {
   }
 
  private:
+  String name_;
   int32_t last_off_on_time_;
   int32_t last_on_off_time_;
   bool state_;
@@ -101,11 +106,11 @@ class OnOffVariable {
 };
 
 // Laser status
-static OnOffVariable laser_status;
+static OnOffVariable laser_status("laser");
 // Spindle status
-static OnOffVariable spindle_status;
+static OnOffVariable spindle_status("spindle");
 // Air status
-static OnOffVariable air_status;
+static OnOffVariable air_status("air");
 
 // The buffer that contains the current command
 static const int CMD_BUFFER_MAX_SIZE = 64;
@@ -151,7 +156,6 @@ typedef enum {
 } MachineError;
 static uint16_t error = ERROR_NONE;
 
-static String debug = "";
 
 void setup() {
   // Serial
@@ -356,6 +360,14 @@ void processCmd() {
     sendDone();
     return;
   }
+  if (cmd_buffer.startsWith("error=")) {
+    // Set error
+    int new_error;
+    sscanf(cmd_buffer.c_str(), "error=%d", &new_error);
+    error = new_error;
+    sendDone();
+    return;
+  }
   // Unknown command
   Serial.println("unknown");
 }
@@ -382,6 +394,8 @@ void loop() {
     }
   }
   FastLED.show();
+
+  debug = "";
 
   // If we are in manual mode, we can skip all the following checks and automation
   if (mode == MODE_MANUAL) {
@@ -422,8 +436,8 @@ void loop() {
       digitalWrite(PIN_AIR, HIGH);
     }
 
-    // The door should be closed
-    if (digitalRead(PIN_DOOR)) {
+    // The door should be closed if the laser is on
+    if (laser_status.isOn() && digitalRead(PIN_DOOR)) {
       error |= ERROR_DOOR_OPEN;
     }
     // The laser head should be present
@@ -485,8 +499,8 @@ void loop() {
   }
 
   // After a while, we can turn off the air and the pump
-  if (spindle_status.hasBeenOffFor(SPINDLE_OFF_TO_VACUUM_OFF_MS) &&
-      laser_status.hasBeenOffFor(SPINDLE_OFF_TO_VACUUM_OFF_MS) ) {
+  if (laser_status.hasBeenOffFor(SPINDLE_OFF_TO_MIST_OFF_MS) &&
+      spindle_status.hasBeenOffFor(LASER_OFF_TO_AIR_OFF_MS) ) {
     digitalWrite(PIN_AIR, LOW);
     digitalWrite(PIN_PUMP_ENA, HIGH);
   }

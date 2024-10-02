@@ -65,7 +65,7 @@ class ErrorText:
         self.window = window
         self.frame = tk.LabelFrame(self.window, text="Error")
         self.frame.grid(column=0, row=row, sticky=tk.W+tk.E, padx=10, pady=10)
-        self.text = tk.Label(self.frame, text="", font=("Arial", 18, "bold"))
+        self.text = tk.Label(self.frame, text="", font=("Arial", 18, "bold"), fg="red")
         self.text.grid(column=0, row=0, padx=10, pady=5)
 
     def update(self, value):
@@ -80,7 +80,9 @@ class ErrorText:
             str += "Laser head present\n"
         if value & 16:
             str += "Door open\n"
-        self.text.config(text=value)
+        if str:
+            str = str[:-1]
+        self.text.config(text=str)
 
 class MultiChoice:
     """ This is used to implement a simple multi-choice button."""
@@ -293,6 +295,8 @@ class CNC:
             self.gui.pwm.update(float(status["pwm"]) / 1024.0 * 100.0)
         if hasattr(self.gui, "error") and "error" in status:
             self.gui.error.update(int(status["error"]))
+        if "debug" in status and status["debug"]:
+            print(status["debug"])
 
     def modeChange(self, choice):
         """ This function is used to change the mode of the CNC."""
