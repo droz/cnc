@@ -1,7 +1,14 @@
 #include <FastLED.h>
+// The two following libraries are both called "Timer" but have very different use:
+// The first one is TimerInterrupt, which is used to trigger the pump
+//  stepper motor from a hardware timer. It does all the wiring to use the
+//  interrupt of the timer.
 #define USE_TIMER_1 true
 #include <TimerInterrupt.h>
-
+// The second one is Arduino-Timer, which is used to delay some actions (like
+//  turning off the air after a while). It is a software timer that is not
+//  using any hardware interrupt. We tickle it at every loop iteration.
+#include <arduino-timer.h>
 #include <limits.h>
 #include <CRC.h>
 
@@ -88,6 +95,9 @@ struct Status {
   uint8_t debug_length;
 };
 
+// This timer is used to delay some actions (like turning off the air after a while)
+Timer<16, millis> timer;
+
 // This class is used to track the status and history of some variables
 class OnOffVariable {
  public:
@@ -98,6 +108,7 @@ class OnOffVariable {
     last_on_off_time_ = LONG_MIN;
   }
 
+  // Update the state of the variable. Should be called at every loop iteration
   void update(bool new_state) {
     uint32_t now = millis();
     last_state_ = state_;
@@ -111,6 +122,7 @@ class OnOffVariable {
     }
   }
 
+  // Check if the variable has been on for a certain duration
   bool hasBeenOnFor(uint32_t duration_ms) {
     if(!state_) {
       return false;
@@ -121,6 +133,7 @@ class OnOffVariable {
     return (millis() - last_off_on_time_) >= duration_ms;
   }
 
+  // Check if the variable has been off for a certain duration
   bool hasBeenOffFor(uint32_t duration_ms) {
     if(state_) {
       return false;
@@ -131,12 +144,19 @@ class OnOffVariable {
     return (millis() - last_on_off_time_) >= duration_ms;
   }
 
+  // Return the current state of the variable
   bool isOn() {
     return state_;
   }
 
+  // Return true if the variable has just been turned on (in the last cycle)
   bool justTurnedOn() {
     return state_ && !last_state_;
+  }
+
+  // Return true if the variable has just been turned off (in the last cycle)
+  bool justTurnedOff() {
+    return !state_ && last_state_;
   }
 
  private:
@@ -390,6 +410,10 @@ bool processCmd() {
     // Set Laser
     int state;
     sscanf(cmd_buffer.c_str(), "laser=%d", &state);
+    // We can turn the laser on only if we are free of errors
+    if (error != ERROR_NONE) {
+      state = 0;
+    }
     digitalWrite(PIN_LASER, state);
     sendDone();
     return true;
@@ -459,6 +483,25 @@ void updateLed(uint8_t led, CRGB color) {
   FastLED.show();
 }
 
+bool turnAirOff(void*) {
+  digitalWrite(PIN_AIR, LOW);
+  digitalWrite(PIN_PUMP_ENA, HIGH);
+  debug_string = "Air turned off after delay";
+  return true;
+}
+
+bool turnHoodOff(void*) {
+  digitalWrite(PIN_HOOD, LOW);
+  debug_string = "Hood turned off after delay";
+  return true;
+}
+
+bool turnVacuumOff(void*) {
+  digitalWrite(PIN_VACUUM, LOW);
+  debug_string = "Vacuum turned off after delay";
+  return true;
+}
+
 void loop() {
   // Wait for new command
   if (Serial.available() > 0) {
@@ -487,36 +530,39 @@ void loop() {
     mode = MODE_IDLE;
   }
 
-  // Update LED0 according to the mode
+  // Update LED2 according to the mode
   switch (mode) {
     case MODE_IDLE:
-      updateLed(0, LED_IDLE_MODE);
+      updateLed(2, LED_IDLE_MODE);
       break;
     case MODE_LASER:
-      updateLed(0, LED_LASER_MODE);
+      updateLed(2, LED_LASER_MODE);
       break;
     case MODE_ROUTER:
-      updateLed(0, LED_ROUTER_MODE);
+      updateLed(2, LED_ROUTER_MODE);
       break;
     case MODE_MANUAL:
-      updateLed(0, LED_MANUAL_MODE);
+      updateLed(2, LED_MANUAL_MODE);
       break;
     default:
-      updateLed(0, CRGB::Black);
+      updateLed(2, CRGB::Black);
       break;
   }
+
+  // Update LED0 according to the error
+  if (error != ERROR_NONE) {
+    updateLed(0, CRGB::Red);
+  } else {
+    updateLed(0, CRGB::Black);
+  }
+
+  // Tickle the timer
+  timer.tick();
 
   // Update some variables
   laser_status.update(digitalRead(PIN_LASER) && analogRead(PIN_PWM));
   spindle_status.update(digitalRead(PIN_SPINDLE) && analogRead(PIN_PWM));
   air_status.update(digitalRead(PIN_AIR));
-
-  // Update LED2 according to the error
-  if (error != ERROR_NONE) {
-    updateLed(2, CRGB::Red);
-  } else {
-    updateLed(2, CRGB::Black);
-  }
 
   // If we are in manual mode, we can skip all the following checks and automation
   if (mode == MODE_MANUAL) {
@@ -614,22 +660,23 @@ void loop() {
     }
   }
 
-  // After a while, we can turn off the air and the pump
-  if (laser_status.hasBeenOffFor(SPINDLE_OFF_TO_MIST_OFF_MS) &&
-      spindle_status.hasBeenOffFor(LASER_OFF_TO_AIR_OFF_MS) ) {
-    digitalWrite(PIN_AIR, LOW);
-    digitalWrite(PIN_PUMP_ENA, HIGH);
+  // Set the hood, air and pump to turn off automatically after a while
+  if (laser_status.justTurnedOff()) {
+    debug_string = "Laser turned off";
+    timer.in(LASER_OFF_TO_AIR_OFF_MS, turnAirOff);
+    timer.in(LASER_OFF_TO_HOOD_OFF_MS, turnHoodOff);
   }
-
-  // After a while, we can turn off the hood
-  if (laser_status.hasBeenOffFor(LASER_OFF_TO_HOOD_OFF_MS) &&
-      spindle_status.hasBeenOffFor(SPINDLE_OFF_TO_HOOD_OFF_MS) ) {
-    digitalWrite(PIN_HOOD, LOW);
+  if (spindle_status.justTurnedOff()) {
+    debug_string = "Spindle turned off";
+    timer.in(SPINDLE_OFF_TO_MIST_OFF_MS, turnAirOff);
+    timer.in(SPINDLE_OFF_TO_HOOD_OFF_MS, turnHoodOff);
+    timer.in(SPINDLE_OFF_TO_VACUUM_OFF_MS, turnVacuumOff);
   }
-
-  // After a while, we can turn off the vacuum
-  if (spindle_status.hasBeenOffFor(SPINDLE_OFF_TO_VACUUM_OFF_MS)) {
-    digitalWrite(PIN_VACUUM, LOW);
+  if (laser_status.justTurnedOn()) {
+    debug_string = "Laser turned on";
+  }
+  if (spindle_status.justTurnedOn()) {
+    debug_string = "Spindle turned on";
   }
 
 

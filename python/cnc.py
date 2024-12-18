@@ -3,6 +3,7 @@ It connects to a GRBL controller and an Arduino board through USB.
 Depending if the laser head is connected, it will either run the CNC
 program (Shapeoko) or the laser program (Lightburn)."""
 
+import logging as log
 import tkinter as tk
 import tkinter.messagebox as tkmessagebox
 import tkdial as tkdial
@@ -141,7 +142,7 @@ class Gauge:
 class GrblInterface:
     """ This class is used to interface with the GRBL controller."""
     def __init__(self, port):
-        print(f"Connecting to GRBL controller on port {port}")
+        log.info(f"Connecting to GRBL controller on port {port}")
         self.serial = serial.Serial(port, 115200, timeout=60)
         self.wakeUp()
 
@@ -191,7 +192,7 @@ class GrblInterface:
 
     def home(self):
         """ This function is used to home the GRBL controller."""
-        print("Homing the machine...")
+        log.info("Homing the machine...")
         # Send the homing command
         self.serial.write("$H\n".encode('utf-8'))
         # Wait for the OK to come back
@@ -204,14 +205,15 @@ class GrblInterface:
         response = self.serial.read_all().decode('utf-8').replace('\r', '')
         if response != 'ok\n':
             raise Exception(f"Error waiting for home")
-        print("Machine homed")
+        log.info("  Machine homed")
 
 class ArduinoInterface:
     """ This class is used to interface with the Arduino board."""
     def __init__(self, port):
-        print(f"Connecting to Arduino board on port {port}")
+        log.info(f"Connecting to Arduino board on port {port}")
         self.serial = serial.Serial(port, 115200, timeout=1)
         time.sleep(2)
+        log.info(f"  Connected")
 
     def readAsciiStatus(self):
         """ This function is used to read the status of the Arduino board,
@@ -274,7 +276,7 @@ class ArduinoInterface:
         self.serial.write(b"bstatus\n")
         size = int(self.serial.read(1)[0])
         if (size != expected_size):
-            print(f"Error reading binary status, expected {expected_size} bytes, got {size} bytes")
+            log.warning(f"Error reading binary status, expected {expected_size} bytes, got {size} bytes")
             time.sleep(0.1)
             self.serial.read_all()
             return None
@@ -283,7 +285,7 @@ class ArduinoInterface:
         hash = crc8.crc8()
         hash.update(payload)
         if crc[0] != hash.digest()[0]:
-            print("CRC error")
+            log.warning("CRC error")
             time.sleep(0.1)
             self.serial.read_all()
             return None
@@ -317,7 +319,7 @@ class ArduinoInterface:
             The value of the setting."""
         self.serial.write(f"{key}\n".encode('utf-8'))
         time.sleep(0.1)
-        response = self.serial.read_all().decode('utf-8').replace('\r', '')
+        response = self.serial.read_all().decode('utf-8').replace('\r', '').replace('\n', '')
         return response
 
     def writeValue(self, key, value):
@@ -394,7 +396,7 @@ class CNC:
         # If there is a debug message waiting, pull it        
         if "debug_length" in status and status["debug_length"]:
             debug = self.arduino.readValue("debug")
-            print("Arduino says: ", debug)
+            log.info("Arduino says: " + debug)
 
     def modeChange(self, choice):
         """ This function is used to change the mode of the CNC."""
@@ -554,11 +556,16 @@ def killProgramByName(name):
     # List all running processes
     for proc in psutil.process_iter():
         if proc.name() == name:
-            print(f"Killing {proc.name()}")
+            log.info(f"Killing {proc.name()}")
             proc.kill()
 
 def runCNC():
     """ This function is used to run the CNC controller program."""
+
+    # Setup the logging format to display time
+    log.basicConfig(format='%(asctime)s - %(message)s', level=log.INFO)
+
+    # Parse the command line arguments
     arg_parser = argparse.ArgumentParser(description="CNC controller")
     arg_parser.add_argument("--grbl_port", help="COM port connected to the GRBL controller", default="COM6", type=str)
     arg_parser.add_argument("--arduino_port", help="COM port connected to the Arduino board", default="COM7", type=str)
@@ -583,13 +590,13 @@ def runCNC():
     # Now what we do depends on the mode
     if args.manual:
         # Change mode
-        print("Configuring the GRBL controller to run in manual mode...")
+        log.info("Configuring the GRBL controller to run in manual mode...")
         cnc.modeSet(CNC.Mode.MANUAL)
         # Create the GUI
         cnc.gui = ManualGui(cnc)
 
     if args.laser:
-        print("Configuring the GRBL controller to run in laser mode...")
+        log.info("Configuring the GRBL controller to run in laser mode...")
         # We first connect to the GRBL controller and make sure that we send the correct settings
         # Do not report anything back except status
         cnc.grbl.writeSettings(10, 0)
@@ -608,14 +615,14 @@ def runCNC():
         # Create the GUI
         cnc.gui = LaserGui(cnc)
         # Then we can open the Lightburn program
-        print("Starting Lightburn...")
+        log.info("Starting Lightburn...")
         cnc.process = subprocess.Popen(args.lighburn_exec)
         # Changing the Arduino to Laser mode
-        print("Configuring the Arduino board to run in laser mode...")
+        log.info("Configuring the Arduino board to run in laser mode...")
         cnc.modeSet(CNC.Mode.LASER)
 
     if args.router:
-        print("Configuring the GRBL controller to run in Router mode...")
+        log.info("Configuring the GRBL controller to run in Router mode...")
         # We first connect to the GRBL controller and make sure that we send the correct settings
         # Report everything back
         cnc.grbl.writeSettings(10, 255)
@@ -634,10 +641,10 @@ def runCNC():
         # Create the GUI
         cnc.gui = RouterGui(cnc)
         # Then we can open the Shapeoko program
-        print("Starting Carbide Motion...")
+        log.info("Starting Carbide Motion...")
         cnc.process = subprocess.Popen(args.shapeoko_exec)
         # Changing the Arduino to Router mode
-        print("Configuring the Arduino board to run in router mode...")
+        log.info("Configuring the Arduino board to run in router mode...")
         cnc.modeSet(CNC.Mode.ROUTER)
 
     # Main loop
