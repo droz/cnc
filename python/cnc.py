@@ -259,6 +259,8 @@ class ArduinoInterface:
             status["pump_interval_ms"] = int(status["pump_interval_ms"])
         if "error" in status:
             status["error"] = int(status["error"])
+        if "debug_length" in status:
+            status["debug_length"] = int(status["debug_length"])
 
         return status
 
@@ -267,7 +269,7 @@ class ArduinoInterface:
             using a binary scheme.
         Returns:
             A dictionary of values indexed by string key."""
-        format = "<BBHHHHH"        
+        format = "<BBHHHHHB"        
         expected_size = struct.calcsize(format)
         self.serial.write(b"bstatus\n")
         size = int(self.serial.read(1)[0])
@@ -303,9 +305,20 @@ class ArduinoInterface:
             "pwm" : int(response[4]),
             "pump_interval_ms" : int(response[5]),
             "error" : int(response[6]),
+            "debug_length" : int(response[7])
         }
         return status
 
+    def readValue(self, key):
+        """ This function is used to read a setting to the Arduino board.
+        Args:
+            key: The string key of the setting.
+        Returns:
+            The value of the setting."""
+        self.serial.write(f"{key}\n".encode('utf-8'))
+        time.sleep(0.1)
+        response = self.serial.read_all().decode('utf-8').replace('\r', '')
+        return response
 
     def writeValue(self, key, value):
         """ This function is used to write a setting to the Arduino board.
@@ -336,11 +349,8 @@ class CNC:
 
     def update(self):
         # Read the status of the Arduino board
-        start = time.time()
         status = self.arduino.readBinaryStatus()
         #status = self.arduino.readAsciiStatus()
-        now = time.time()
-        print(start, now, now - start)
         if not status:
             return
 
@@ -380,8 +390,11 @@ class CNC:
             self.gui.pwm.update(float(status["pwm"]) / 1024.0 * 100.0)
         if hasattr(self.gui, "error") and "error" in status:
             self.gui.error.update(status["error"])
-        if "debug" in status and status["debug"]:
-            print(status["debug"])
+
+        # If there is a debug message waiting, pull it        
+        if "debug_length" in status and status["debug_length"]:
+            debug = self.arduino.readValue("debug")
+            print("Arduino says: ", debug)
 
     def modeChange(self, choice):
         """ This function is used to change the mode of the CNC."""
@@ -577,7 +590,6 @@ def runCNC():
 
     if args.laser:
         print("Configuring the GRBL controller to run in laser mode...")
-        cnc.modeSet(CNC.Mode.LASER)
         # We first connect to the GRBL controller and make sure that we send the correct settings
         # Do not report anything back except status
         cnc.grbl.writeSettings(10, 0)
@@ -598,10 +610,12 @@ def runCNC():
         # Then we can open the Lightburn program
         print("Starting Lightburn...")
         cnc.process = subprocess.Popen(args.lighburn_exec)
+        # Changing the Arduino to Laser mode
+        print("Configuring the Arduino board to run in laser mode...")
+        cnc.modeSet(CNC.Mode.LASER)
 
     if args.router:
         print("Configuring the GRBL controller to run in Router mode...")
-        cnc.modeSet(CNC.Mode.ROUTER)
         # We first connect to the GRBL controller and make sure that we send the correct settings
         # Report everything back
         cnc.grbl.writeSettings(10, 255)
@@ -622,6 +636,9 @@ def runCNC():
         # Then we can open the Shapeoko program
         print("Starting Carbide Motion...")
         cnc.process = subprocess.Popen(args.shapeoko_exec)
+        # Changing the Arduino to Router mode
+        print("Configuring the Arduino board to run in router mode...")
+        cnc.modeSet(CNC.Mode.ROUTER)
 
     # Main loop
     while True:

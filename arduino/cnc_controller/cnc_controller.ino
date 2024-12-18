@@ -24,6 +24,12 @@
 // Maximum air pressure for the laser
 #define MAX_AIR_PRESSURE 513
 
+// LED color scheme
+#define LED_IDLE_MODE CRGB::Green
+#define LED_LASER_MODE CRGB::Red
+#define LED_ROUTER_MODE CRGB::Blue
+#define LED_MANUAL_MODE CRGB::Yellow
+
 // Pin mapping
 #define PIN_LEDS         4
 #define PIN_SPINDLE      A0
@@ -40,12 +46,16 @@
 #define PIN_VACUUM_FORCE 2
 #define PIN_HOOD         10
 
-// The LED strip
+// The LEDs
 #define NUM_LEDS         3
 CRGB leds[NUM_LEDS];
 
+// Last time at which we received a command from the PC
+static uint32_t last_cmd_time = 0;
+#define CMD_TIMEOUT_MS 1000
+
 // A debug string
-static String debug = "";
+static String debug_string = "";
 
 // This struct is used to report status to the computer
 struct Status {
@@ -74,6 +84,8 @@ struct Status {
   // TODO(report LEDs)
   // The current error code
   uint16_t error;
+  // The length of the debug string
+  uint8_t debug_length;
 };
 
 // This class is used to track the status and history of some variables
@@ -194,9 +206,9 @@ void setup() {
   // LEDs
   FastLED.addLeds<WS2812B, PIN_LEDS, RGB>(leds, NUM_LEDS);
   FastLED.setBrightness(255);
-  leds[0] = CRGB::Red;
-  leds[1] = CRGB::Green;
-  leds[2] = CRGB::Blue;
+  leds[0] = CRGB::Black;
+  leds[1] = CRGB::Black;
+  leds[2] = CRGB::Black;
   FastLED.show();
 
   // Spindle
@@ -255,10 +267,39 @@ void sendDone() {
 }
 
 // Process the command in the serial buffer
-void processCmd() {
+bool processCmd() {
+  if (cmd_buffer.startsWith("bstatus")) {
+    // Binary status
+    Status status;
+    status.mode = mode;
+    status.submode = submode;
+    status.pins = 0;
+    status.pins |= !digitalRead(PIN_DOOR) << 0;
+    status.pins |= !digitalRead(PIN_LASER_HEAD) << 1;
+    status.pins |= !digitalRead(PIN_VACUUM_FORCE) << 2;
+    status.pins |= digitalRead(PIN_VACUUM) << 3;
+    status.pins |= digitalRead(PIN_HOOD) << 4;
+    status.pins |= digitalRead(PIN_SPINDLE) << 5;
+    status.pins |= digitalRead(PIN_LASER) << 6;
+    status.pins |= digitalRead(PIN_AIR) << 7;
+    status.pins |= !digitalRead(PIN_PUMP_ENA) << 8;
+    status.pressure = analogRead(PIN_PRESSURE);
+    status.pwm = analogRead(PIN_PWM);
+    status.pump_interval_ms = pump_interval_ms;
+    status.error = error;
+    status.debug_length = debug_string.length();
+    uint8_t size = sizeof(status);
+    uint8_t crc = calcCRC8((uint8_t*) &status, sizeof(status));
+    Serial.write((uint8_t*)&size, sizeof(size));
+    Serial.write((uint8_t*)&status, sizeof(status));
+    Serial.write((uint8_t*)&crc, sizeof(crc));
+    return true;
+  }
+
   if (cmd_buffer.startsWith("debug")) {
-    Serial.println("debug=" + debug);
-    return;
+    Serial.println(debug_string);
+    debug_string = "";
+    return true;
   }
 
   if (cmd_buffer.startsWith("status")) {
@@ -281,35 +322,8 @@ void processCmd() {
     Serial.println("led1=" + String(leds[1].r) + "," + String(leds[1].g) + "," + String(leds[1].b));
     Serial.println("led2=" + String(leds[2].r) + "," + String(leds[2].g) + "," + String(leds[2].b));
     Serial.println("error=" + String(error));
-    Serial.println("debug=" + debug);
-    return;
-  }
-
-  if (cmd_buffer.startsWith("bstatus")) {
-    // Binary status
-    Status status;
-    status.mode = mode;
-    status.submode = submode;
-    status.pins = 0;
-    status.pins |= !digitalRead(PIN_DOOR) << 0;
-    status.pins |= !digitalRead(PIN_LASER_HEAD) << 1;
-    status.pins |= !digitalRead(PIN_VACUUM_FORCE) << 2;
-    status.pins |= digitalRead(PIN_VACUUM) << 3;
-    status.pins |= digitalRead(PIN_HOOD) << 4;
-    status.pins |= digitalRead(PIN_SPINDLE) << 5;
-    status.pins |= digitalRead(PIN_LASER) << 6;
-    status.pins |= digitalRead(PIN_AIR) << 7;
-    status.pins |= !digitalRead(PIN_PUMP_ENA) << 8;
-    status.pressure = analogRead(PIN_PRESSURE);
-    status.pwm = analogRead(PIN_PWM);
-    status.pump_interval_ms = pump_interval_ms;
-    status.error = error;
-    uint8_t size = sizeof(status);
-    uint8_t crc = calcCRC8((uint8_t*) &status, sizeof(status));
-    Serial.write((uint8_t*)&size, sizeof(size));
-    Serial.write((uint8_t*)&status, sizeof(status));
-    Serial.write((uint8_t*)&crc, sizeof(crc));
-    return;
+    Serial.println("debug_length=" + String(debug_string.length()));
+    return true;
   }
 
   if (cmd_buffer.startsWith("mode=")) {
@@ -322,12 +336,12 @@ void processCmd() {
     } else {
       Serial.println("args_error");
     }
-    return;
+    return true;
   }
   // If we are in IDLE mode, then all other commands are ignored
   if (mode == MODE_IDLE) {
     Serial.println("unknown");
-    return;
+    return true;
   }
   if (cmd_buffer.startsWith("submode=")) {
     // Set submode
@@ -335,7 +349,7 @@ void processCmd() {
     sscanf(cmd_buffer.c_str(), "submode=%d", &new_submode);
     submode = new_submode;
     sendDone();
-    return;
+    return true;
   }
   if (cmd_buffer.startsWith("led0=")) {
     // Set LED 0
@@ -344,7 +358,7 @@ void processCmd() {
     leds[0] = CRGB(r, g, b);
     FastLED.show();
     sendDone();
-    return;
+    return true;
   }
   if (cmd_buffer.startsWith("led1=")) {
     // Set LED 1
@@ -353,7 +367,7 @@ void processCmd() {
     leds[1] = CRGB(r, g, b);
     FastLED.show();
     sendDone();
-    return;
+    return true;
   }
   if (cmd_buffer.startsWith("led2=")) {
     // Set LED 2
@@ -362,7 +376,7 @@ void processCmd() {
     leds[2] = CRGB(r, g, b);
     FastLED.show();
     sendDone();
-    return;
+    return true;
   }
   if (cmd_buffer.startsWith("spindle=")) {
     // Set Spindle
@@ -370,7 +384,7 @@ void processCmd() {
     sscanf(cmd_buffer.c_str(), "spindle=%d", &state);
     digitalWrite(PIN_SPINDLE, state);
     sendDone();
-    return;
+    return true;
   }
   if (cmd_buffer.startsWith("laser=")) {
     // Set Laser
@@ -378,7 +392,7 @@ void processCmd() {
     sscanf(cmd_buffer.c_str(), "laser=%d", &state);
     digitalWrite(PIN_LASER, state);
     sendDone();
-    return;
+    return true;
   }
   if (cmd_buffer.startsWith("air=")) {
     // Set Air
@@ -386,7 +400,7 @@ void processCmd() {
     sscanf(cmd_buffer.c_str(), "air=%d", &state);
     digitalWrite(PIN_AIR, state);
     sendDone();
-    return;
+    return true;
   }
   if (cmd_buffer.startsWith("vacuum=")) {
     // Set Vacuum
@@ -394,7 +408,7 @@ void processCmd() {
     sscanf(cmd_buffer.c_str(), "vacuum=%d", &state);
     digitalWrite(PIN_VACUUM, state);
     sendDone();
-    return;
+    return true;
   }
   if (cmd_buffer.startsWith("hood=")) {
     // Set Hood
@@ -402,18 +416,18 @@ void processCmd() {
     sscanf(cmd_buffer.c_str(), "hood=%d", &state);
     digitalWrite(PIN_HOOD, state);
     sendDone();
-    return;
+    return true;
   }
   if (cmd_buffer.startsWith("pump_interval_ms=")) {
     // Set Pump Speed
     sscanf(cmd_buffer.c_str(), "pump_interval_ms=%d", &pump_interval_ms);
     if (pump_interval_ms < 0 || pump_interval_ms > 1000) {
       Serial.println("args_error");
-      return;
+      return false;
     }
     updatePumpSpeed(pump_interval_ms);
     sendDone();
-    return;
+    return true;
   }
   if (cmd_buffer.startsWith("pump_enable=")) {
     // Set Pump enable
@@ -421,7 +435,7 @@ void processCmd() {
     sscanf(cmd_buffer.c_str(), "pump_enable=%d", &state);
     digitalWrite(PIN_PUMP_ENA, !state);
     sendDone();
-    return;
+    return true;
   }
   if (cmd_buffer.startsWith("error=")) {
     // Set error
@@ -429,22 +443,32 @@ void processCmd() {
     sscanf(cmd_buffer.c_str(), "error=%d", &new_error);
     error = new_error;
     sendDone();
-    return;
+    return true;
   }
   // Unknown command
   Serial.println("unknown");
+
+  return false;
+}
+
+void updateLed(uint8_t led, CRGB color) {
+  if (leds[led] == color) {
+    return;
+  }
+  leds[led] = color;
+  FastLED.show();
 }
 
 void loop() {
-  uint32_t now = millis();
-
   // Wait for new command
   if (Serial.available() > 0) {
     // read the incoming byte and add it to the current command buffer
     char c = Serial.read();
     if (c == '\n') {
       // This command is ready to go
-      processCmd();
+      if (processCmd()) {
+        last_cmd_time = millis();
+      }
       cmd_buffer = "";
     } else {
       // Add the character to the buffer
@@ -456,9 +480,43 @@ void loop() {
       }
     }
   }
-  FastLED.show();
 
-  debug = "";
+  // If we have not received a command for a while, we go to IDLE mode
+  if (mode != MODE_IDLE && millis() - last_cmd_time > CMD_TIMEOUT_MS) {
+    debug_string = "mode timeout after " + String(millis() - last_cmd_time) + "ms";
+    mode = MODE_IDLE;
+  }
+
+  // Update LED0 according to the mode
+  switch (mode) {
+    case MODE_IDLE:
+      updateLed(0, LED_IDLE_MODE);
+      break;
+    case MODE_LASER:
+      updateLed(0, LED_LASER_MODE);
+      break;
+    case MODE_ROUTER:
+      updateLed(0, LED_ROUTER_MODE);
+      break;
+    case MODE_MANUAL:
+      updateLed(0, LED_MANUAL_MODE);
+      break;
+    default:
+      updateLed(0, CRGB::Black);
+      break;
+  }
+
+  // Update some variables
+  laser_status.update(digitalRead(PIN_LASER) && analogRead(PIN_PWM));
+  spindle_status.update(digitalRead(PIN_SPINDLE) && analogRead(PIN_PWM));
+  air_status.update(digitalRead(PIN_AIR));
+
+  // Update LED2 according to the error
+  if (error != ERROR_NONE) {
+    updateLed(2, CRGB::Red);
+  } else {
+    updateLed(2, CRGB::Black);
+  }
 
   // If we are in manual mode, we can skip all the following checks and automation
   if (mode == MODE_MANUAL) {
@@ -476,11 +534,6 @@ void loop() {
     ITimer1.stopTimer();
     return;
   }
-
-  // Update some variables
-  laser_status.update(digitalRead(PIN_LASER) && analogRead(PIN_PWM));
-  spindle_status.update(digitalRead(PIN_SPINDLE) && analogRead(PIN_PWM));
-  air_status.update(digitalRead(PIN_AIR));
 
   // - If we are in laser mode,
   if (mode == MODE_LASER) {
