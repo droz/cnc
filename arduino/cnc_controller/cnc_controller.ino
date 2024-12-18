@@ -3,6 +3,7 @@
 #include <TimerInterrupt.h>
 
 #include <limits.h>
+#include <CRC.h>
 
 // Various delays, all in ms
 // laser off to air off
@@ -46,7 +47,36 @@ CRGB leds[NUM_LEDS];
 // A debug string
 static String debug = "";
 
-// These structures are used to track the status and history of some variables
+// This struct is used to report status to the computer
+struct Status {
+  // The current mode
+  uint8_t mode;
+  // The current submode
+  uint8_t submode;
+  // The status of the pins
+  //  BIT0: door
+  //  BIT1: laser_head
+  //  BIT2: force_vacuum
+  //  BIT3: vacuum
+  //  BIT4: hood
+  //  BIT5: spindle
+  //  BIT6: laser
+  //  BIT7: air
+  //  BIT8: pump_enable
+  //  BIT9-15: reserved for future use
+  uint16_t pins;
+  // The current measured air pressure (0-1023), max range is 100psi
+  uint16_t pressure;
+  // The current measured PWM (0-1023), max range is 100%
+  uint16_t pwm;
+  // The current pump interval, in ms
+  uint16_t pump_interval_ms;
+  // TODO(report LEDs)
+  // The current error code
+  uint16_t error;
+};
+
+// This class is used to track the status and history of some variables
 class OnOffVariable {
  public:
   OnOffVariable(const String& name) {
@@ -117,7 +147,7 @@ static const int CMD_BUFFER_MAX_SIZE = 64;
 String cmd_buffer = "";
 
 // The current interval between pump steps, in ms
-int pump_interval_ms = 0;
+uint16_t pump_interval_ms = 0;
 
 // The mode in which we operate the machine
 typedef enum {
@@ -143,7 +173,7 @@ typedef enum {
   // VACUUUM: Vacuum is on
   SUBMODE_VACUUM = 4
 } Submode;
-static uint16_t submode = SUBMODE_NOTHING;
+static uint8_t submode = SUBMODE_NOTHING;
 
 // The error codes
 typedef enum {
@@ -226,6 +256,11 @@ void sendDone() {
 
 // Process the command in the serial buffer
 void processCmd() {
+  if (cmd_buffer.startsWith("debug")) {
+    Serial.println("debug=" + debug);
+    return;
+  }
+
   if (cmd_buffer.startsWith("status")) {
     // Send status
     Serial.println("mode=" + String(mode));
@@ -249,6 +284,34 @@ void processCmd() {
     Serial.println("debug=" + debug);
     return;
   }
+
+  if (cmd_buffer.startsWith("bstatus")) {
+    // Binary status
+    Status status;
+    status.mode = mode;
+    status.submode = submode;
+    status.pins = 0;
+    status.pins |= !digitalRead(PIN_DOOR) << 0;
+    status.pins |= !digitalRead(PIN_LASER_HEAD) << 1;
+    status.pins |= !digitalRead(PIN_VACUUM_FORCE) << 2;
+    status.pins |= digitalRead(PIN_VACUUM) << 3;
+    status.pins |= digitalRead(PIN_HOOD) << 4;
+    status.pins |= digitalRead(PIN_SPINDLE) << 5;
+    status.pins |= digitalRead(PIN_LASER) << 6;
+    status.pins |= digitalRead(PIN_AIR) << 7;
+    status.pins |= !digitalRead(PIN_PUMP_ENA) << 8;
+    status.pressure = analogRead(PIN_PRESSURE);
+    status.pwm = analogRead(PIN_PWM);
+    status.pump_interval_ms = pump_interval_ms;
+    status.error = error;
+    uint8_t size = sizeof(status);
+    uint8_t crc = calcCRC8((uint8_t*) &status, sizeof(status));
+    Serial.write((uint8_t*)&size, sizeof(size));
+    Serial.write((uint8_t*)&status, sizeof(status));
+    Serial.write((uint8_t*)&crc, sizeof(crc));
+    return;
+  }
+
   if (cmd_buffer.startsWith("mode=")) {
     // Set mode
     int new_mode;

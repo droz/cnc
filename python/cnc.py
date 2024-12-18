@@ -15,6 +15,8 @@ import re
 import enum
 import psutil
 import subprocess
+import struct
+import crc8
 
 def resource_path(relative_path):
     """ Get absolute path to resource """
@@ -211,8 +213,9 @@ class ArduinoInterface:
         self.serial = serial.Serial(port, 115200, timeout=1)
         time.sleep(2)
 
-    def readStatus(self):
-        """ This function is used to read the status of the Arduino board.
+    def readAsciiStatus(self):
+        """ This function is used to read the status of the Arduino board,
+            using a human readable ASCII scheme.
         Returns:
             A dictionary of values indexed by string key."""
         self.serial.write(b"status\n")
@@ -225,7 +228,84 @@ class ArduinoInterface:
                 key = result.group(1)
                 value = result.group(2)
                 status[key] = value
+        # Type conversions where needed
+        if "mode" in status:
+            status["mode"] = int(status["mode"])
+        if "submode" in status:
+            status["submode"] = int(status["submode"])
+        if "door" in status:
+            status["door"] = bool(int(status["door"]))
+        if "laser_head" in status:
+            status["laser_head"] = bool(int(status["laser_head"]))
+        if "force_vacuum" in status:
+            status["force_vacuum"] = bool(int(status["force_vacuum"]))
+        if "vacuum" in status:
+            status["vacuum"] = bool(int(status["vacuum"]))
+        if "hood" in status:
+            status["hood"] = bool(int(status["hood"]))
+        if "spindle" in status:
+            status["spindle"] = bool(int(status["spindle"]))
+        if "laser" in status:
+            status["laser"] = bool(int(status["laser"]))
+        if "air" in status:
+            status["air"] = bool(int(status["air"]))
+        if "pump_enable" in status:
+            status["pump_enable"] = bool(int(status["pump_enable"]))
+        if "pressure" in status:
+            status["pressure"] = int(status["pressure"])
+        if "pwm" in status:
+            status["pwm"] = int(status["pwm"])
+        if "pump_interval_ms" in status:
+            status["pump_interval_ms"] = int(status["pump_interval_ms"])
+        if "error" in status:
+            status["error"] = int(status["error"])
+
         return status
+
+    def readBinaryStatus(self):
+        """ This function is used to read the status of the Arduino board,
+            using a binary scheme.
+        Returns:
+            A dictionary of values indexed by string key."""
+        format = "<BBHHHHH"        
+        expected_size = struct.calcsize(format)
+        self.serial.write(b"bstatus\n")
+        size = int(self.serial.read(1)[0])
+        if (size != expected_size):
+            print(f"Error reading binary status, expected {expected_size} bytes, got {size} bytes")
+            time.sleep(0.1)
+            self.serial.read_all()
+            return None
+        payload = self.serial.read(size)
+        crc = self.serial.read(1)
+        hash = crc8.crc8()
+        hash.update(payload)
+        if crc[0] != hash.digest()[0]:
+            print("CRC error")
+            time.sleep(0.1)
+            self.serial.read_all()
+            return None
+
+        response = struct.unpack(format, payload)
+        status = {
+            "mode" : int(response[0]),
+            "submode" : int(response[1]),
+            "door" : bool(response[2] & 1),
+            "laser_head" : bool(response[2] & 2),
+            "force_vacuum" : bool(response[2] & 4),
+            "vacuum" : bool(response[2] & 8),
+            "hood" : bool(response[2] & 16),
+            "spindle" : bool(response[2] & 32),
+            "laser" : bool(response[2] & 64),
+            "air" : bool(response[2] & 128),
+            "pump_enable" : bool(response[2] & 256),
+            "pressure" : int(response[3]),
+            "pwm" : int(response[4]),
+            "pump_interval_ms" : int(response[5]),
+            "error" : int(response[6]),
+        }
+        return status
+
 
     def writeValue(self, key, value):
         """ This function is used to write a setting to the Arduino board.
@@ -256,45 +336,50 @@ class CNC:
 
     def update(self):
         # Read the status of the Arduino board
-        status = self.arduino.readStatus()
+        start = time.time()
+        status = self.arduino.readBinaryStatus()
+        #status = self.arduino.readAsciiStatus()
+        now = time.time()
+        print(start, now, now - start)
+        if not status:
+            return
 
         # Update the UI if needed
         if not self.gui:
             return
         if hasattr(self.gui, "mode") and "mode" in status:
-            self.gui.mode.update(int(status["mode"]))
+            self.gui.mode.update(status["mode"])
         if hasattr(self.gui, "air_on") and "air" in status:
-            self.gui.air_on.update(status["air"] == "1")
+            self.gui.air_on.update(status["air"])
         if hasattr(self.gui, "vacuum_on") and "vacuum" in status:
-            self.gui.vacuum_on.update(status["vacuum"] == "1")
+            self.gui.vacuum_on.update(status["vacuum"])
         if hasattr(self.gui, "hood_on") and "hood" in status:
-            self.gui.hood_on.update(status["hood"] == "1")
+            self.gui.hood_on.update(status["hood"])
         if hasattr(self.gui, "spindle_on") and "spindle" in status:
-            self.gui.spindle_on.update(status["spindle"] == "1")
+            self.gui.spindle_on.update(status["spindle"])
         if hasattr(self.gui, "laser_on") and "laser" in status:
-            self.gui.laser_on.update(status["laser"] == "1")
+            self.gui.laser_on.update(status["laser"])
         if hasattr(self.gui, "pump_speed") and "pump_interval_ms" in status:
-            pump_interval_ms = int(status["pump_interval_ms"])
+            pump_interval_ms = status["pump_interval_ms"]
             if pump_interval_ms == 0:
                 self.gui.pump_speed.value.set(0)
             else:
                 self.gui.pump_speed.value.set(200 / pump_interval_ms)
         if hasattr(self.gui, "door_closed") and "door" in status:
-            self.gui.door_closed.update(status["door"] == "1")
+            self.gui.door_closed.update(status["door"])
         if hasattr(self.gui, "laser_present") and "laser_head" in status:
-            self.gui.laser_present.update(status["laser_head"] == "1")
+            self.gui.laser_present.update(status["laser_head"])
         if hasattr(self.gui, "force_vacuum") and "force_vacuum" in status:
-            self.gui.force_vacuum.update(status["force_vacuum"] == "1")
+            self.gui.force_vacuum.update(status["force_vacuum"])
         if hasattr(self.gui, "air_pressure") and "pressure" in status:
-            pressure_int = int(status["pressure"])
-            pressure_psi = (pressure_int - 104.0) / 1024.0 * 100.0
+            pressure_psi = (status["pressure"] - 104.0) / 1024.0 * 100.0
             if pressure_psi < 0:
                 pressure_psi = 0
             self.gui.air_pressure.update(pressure_psi)
         if hasattr(self.gui, "pwm") and "pwm" in status:
             self.gui.pwm.update(float(status["pwm"]) / 1024.0 * 100.0)
         if hasattr(self.gui, "error") and "error" in status:
-            self.gui.error.update(int(status["error"]))
+            self.gui.error.update(status["error"])
         if "debug" in status and status["debug"]:
             print(status["debug"])
 
@@ -481,7 +566,6 @@ def runCNC():
         cnc = CNC(args.grbl_port, args.arduino_port)
     else:
         cnc = CNC(None, args.arduino_port)
-
 
     # Now what we do depends on the mode
     if args.manual:
