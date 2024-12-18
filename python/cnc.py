@@ -5,8 +5,8 @@ program (Shapeoko) or the laser program (Lightburn)."""
 
 import logging as log
 import tkinter as tk
-import tkinter.messagebox as tkmessagebox
 import tkdial as tkdial
+import threading
 import argparse
 import time
 import serial
@@ -15,9 +15,15 @@ import os
 import re
 import enum
 import psutil
-import subprocess
+import pywinauto
 import struct
 import crc8
+
+ERROR_MASK_AIR_PRESSURE_LOW = 1
+ERROR_MASK_AIR_PRESSURE_HIGH = 2
+ERROR_MASK_LASER_HEAD_MISSING = 4
+ERROR_MASK_LASER_HEAD_PRESENT = 8
+ERROR_MASK_DOOR_OPEN = 16
 
 def resource_path(relative_path):
     """ Get absolute path to resource """
@@ -28,6 +34,22 @@ def resource_path(relative_path):
         base_path = os.path.abspath(".")
     return os.path.join(base_path, 'images', relative_path)
 
+def errorToString(error):
+    """ This function is used to convert an error value to a string."""
+    str = ""
+    if error & ERROR_MASK_AIR_PRESSURE_LOW:
+        str += "Air pressure too low\n"
+    if error & ERROR_MASK_AIR_PRESSURE_HIGH:
+        str += "Air pressure too high\n"
+    if error & ERROR_MASK_LASER_HEAD_MISSING:
+        str += "Laser head missing\n"
+    if error & ERROR_MASK_LASER_HEAD_PRESENT:
+        str += "Laser head present\n"
+    if error & ERROR_MASK_DOOR_OPEN:
+        str += "Door open\n"
+    if str:
+        str = str[:-1]
+    return str
 
 class OnOffToggle:
     """ This is used to implement a simple ON/OFF toggle button."""
@@ -73,19 +95,20 @@ class ErrorText:
 
     def update(self, value):
         str = ""
-        if value & 1:
+        if value & ERROR_MASK_AIR_PRESSURE_LOW:
             str += "Air pressure too low\n"
-        if value & 2:
+        if value & ERROR_MASK_AIR_PRESSURE_HIGH:
             str += "Air pressure too high\n"
-        if value & 4:
+        if value & ERROR_MASK_LASER_HEAD_MISSING:
             str += "Laser head missing\n"
-        if value & 8:
+        if value & ERROR_MASK_LASER_HEAD_PRESENT:
             str += "Laser head present\n"
-        if value & 16:
+        if value & ERROR_MASK_DOOR_OPEN:
             str += "Door open\n"
         if str:
             str = str[:-1]
-        self.text.config(text=str)
+        error_string = errorToString(value)
+        self.text.config(text=error_string)
 
 class MultiChoice:
     """ This is used to implement a simple multi-choice button."""
@@ -145,6 +168,7 @@ class GrblInterface:
         log.info(f"Connecting to GRBL controller on port {port}")
         self.serial = serial.Serial(port, 115200, timeout=60)
         self.wakeUp()
+        log.info(f"  Connected")
 
     def wakeUp(self):
         """ This function is used to wake up the GRBL controller."""
@@ -347,7 +371,9 @@ class CNC:
         if arduino_port:
             self.arduino = ArduinoInterface(arduino_port)
         self.gui = None
-        self.process = None
+        self.app = None
+        self.last_errors = 0
+        self.last_pause_time = 0
 
     def update(self):
         # Read the status of the Arduino board
@@ -391,6 +417,7 @@ class CNC:
         if hasattr(self.gui, "pwm") and "pwm" in status:
             self.gui.pwm.update(float(status["pwm"]) / 1024.0 * 100.0)
         if hasattr(self.gui, "error") and "error" in status:
+            self.manageErrors(status)
             self.gui.error.update(status["error"])
 
         # If there is a debug message waiting, pull it        
@@ -459,6 +486,23 @@ class CNC:
         else:
             self.arduino.writeValue("laser", "0")
 
+    def manageErrors(self, status):
+        """ This function is used to manage the current error."""
+        errors = status["error"]
+        new_errors = errors & ~self.last_errors
+        cleared_errors = self.last_errors & ~errors
+
+        if (errors and (status["mode"] == CNC.Mode.LASER.value) and status["pwm"] and
+           (time.time() - self.last_pause_time > 0.5)):
+            log.error("Error reported while laser is on. Sending pause command to Lightburn.")
+            try:
+                self.app.top_window().type_keys("{VK_PAUSE}")
+                self.last_pause_time = time.time()
+            except Exception as e:
+                log.error(f"Error sending pause command to Lightburn: {e}")
+
+        self.last_errors = errors
+
 class Gui:
     """ This class is used to create a GUI for the CNC controller. """
     def __init__(self):
@@ -468,9 +512,8 @@ class Gui:
         self.window.update_idletasks()
         self.window.update()
     def onClosing(self):
-        if tkmessagebox.askokcancel("Quit", "Exit the controller and close application ?"):
-            self.window.destroy()
-            self.window = None
+        self.window.destroy()
+        self.window = None
 
 class ManualGui(Gui):
     """ This class is used to create the GUI for the CNC controller in manual mode."""
@@ -518,7 +561,6 @@ class LaserGui(Gui):
         self.onoff_status.grid(column=0, row=1, sticky=tk.W+tk.E, padx=10, pady=10)
         self.door_closed = OnOffToggle(self.onoff_status, "Door Closed", 0, None, read_only=True)
         self.laser_present = OnOffToggle(self.onoff_status, "Laser Present", 1, None, read_only=True)
-        self.force_vacuum = OnOffToggle(self.onoff_status, "Force Vacuum Switch", 2, None, read_only=True)
         self.gauge_status = tk.Frame(self.status)
         self.gauge_status.grid(column=0, row=2, sticky=tk.W+tk.E, padx=10, pady=10)
         self.air_pressure = Gauge(self.gauge_status, "Air Pressure", 0, 0, 0, 100, 30)
@@ -592,6 +634,7 @@ def runCNC():
         # Change mode
         log.info("Configuring the GRBL controller to run in manual mode...")
         cnc.modeSet(CNC.Mode.MANUAL)
+        log.info("  Configured")
         # Create the GUI
         cnc.gui = ManualGui(cnc)
 
@@ -612,14 +655,16 @@ def runCNC():
         cnc.grbl.sendCommand("G10 L2 P1 X-845 Y-845")
         # Close the connection to the GRBL controller
         cnc.grbl.close()
+        log.info("  Configured")
         # Create the GUI
         cnc.gui = LaserGui(cnc)
         # Then we can open the Lightburn program
         log.info("Starting Lightburn...")
-        cnc.process = subprocess.Popen(args.lighburn_exec)
+        cnc.app = pywinauto.Application().start(args.lighburn_exec)
         # Changing the Arduino to Laser mode
         log.info("Configuring the Arduino board to run in laser mode...")
         cnc.modeSet(CNC.Mode.LASER)
+        log.info("  Configured")
 
     if args.router:
         log.info("Configuring the GRBL controller to run in Router mode...")
@@ -642,10 +687,11 @@ def runCNC():
         cnc.gui = RouterGui(cnc)
         # Then we can open the Shapeoko program
         log.info("Starting Carbide Motion...")
-        cnc.process = subprocess.Popen(args.shapeoko_exec)
+        cnc.app = pywinauto.Application().start(args.shapeoko_exec)
         # Changing the Arduino to Router mode
         log.info("Configuring the Arduino board to run in router mode...")
         cnc.modeSet(CNC.Mode.ROUTER)
+        log.info("  Configured")
 
     # Main loop
     while True:
@@ -655,13 +701,13 @@ def runCNC():
         cnc.gui.update()
         if not cnc.gui.window:
             break
-        # Check that the associated process is still running
-        if cnc.process and cnc.process.poll() is not None:
+        # Check that the associated app is still running
+        if cnc.app and not cnc.app.is_process_running():
             break
 
-    # Clsoe the associated process if it is still running
-    if cnc.process:
-        cnc.process.kill()
+    # Clsoe the associated app if it is still running
+    if cnc.app:
+        cnc.app.kill()
 
 if __name__ == '__main__':
     sys.exit(runCNC())

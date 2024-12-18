@@ -564,6 +564,14 @@ void loop() {
   spindle_status.update(digitalRead(PIN_SPINDLE) && analogRead(PIN_PWM));
   air_status.update(digitalRead(PIN_AIR));
 
+  // We can clear some errors when the conditions are met
+  if (digitalRead(PIN_DOOR)) {
+    error &= ~ERROR_DOOR_OPEN;
+  }
+  if (!digitalRead(PIN_LASER_HEAD)) {
+    error &= ~ERROR_LASER_HEAD_PRESENT;
+  }
+
   // If we are in manual mode, we can skip all the following checks and automation
   if (mode == MODE_MANUAL) {
     return;
@@ -589,9 +597,6 @@ void loop() {
     // The pump should be OFF
     digitalWrite(PIN_PUMP_ENA, HIGH);
 
-    // The vacuum should be OFF
-    digitalWrite(PIN_VACUUM, LOW);
-
     // The hood and air should be ON when the laser is on
     if (laser_status.isOn()) {
       digitalWrite(PIN_HOOD, HIGH);
@@ -606,6 +611,7 @@ void loop() {
     if (digitalRead(PIN_LASER_HEAD)) {
       error |= ERROR_LASER_HEAD_MISSING;
     }
+
     // We can turn the laser on only if we are free of errors
     if (error == ERROR_NONE) {
       digitalWrite(PIN_LASER, HIGH);
