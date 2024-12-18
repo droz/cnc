@@ -96,10 +96,9 @@ struct Status {
 };
 
 // This timer is used to delay some actions (like turning off the air after a while)
-Timer<16, millis> timer;
-Timer<16, millis>::Task air_task;
-Timer<16, millis>::Task hood_task;
-Timer<16, millis>::Task vacuum_task;
+Timer<1, millis> air_timer;
+Timer<1, millis> hood_timer;
+Timer<1, millis> vacuum_timer;
 
 // This class is used to track the status and history of some variables
 class OnOffVariable {
@@ -559,8 +558,10 @@ void loop() {
     updateLed(0, CRGB::Black);
   }
 
-  // Tickle the timer
-  timer.tick();
+  // Tickle the timers
+  air_timer.tick();
+  hood_timer.tick();
+  vacuum_timer.tick();
 
   // Update some variables
   laser_status.update(digitalRead(PIN_LASER) && analogRead(PIN_PWM));
@@ -672,26 +673,30 @@ void loop() {
   // Set the hood, air and pump to turn off automatically after a while
   if (laser_status.justTurnedOff()) {
     debug_string = "Laser turned off";
-    air_task = timer.in(LASER_OFF_TO_AIR_OFF_MS, turnAirOff);
-    hood_task = timer.in(LASER_OFF_TO_HOOD_OFF_MS, turnHoodOff);
+    air_timer.cancel();
+    hood_timer.cancel();
+    air_timer.in(LASER_OFF_TO_AIR_OFF_MS, turnAirOff);
+    hood_timer.in(LASER_OFF_TO_HOOD_OFF_MS, turnHoodOff);
   }
   if (spindle_status.justTurnedOff()) {
     debug_string = "Spindle turned off";
-    air_task = timer.in(SPINDLE_OFF_TO_MIST_OFF_MS, turnAirOff);
-    hood_task = timer.in(SPINDLE_OFF_TO_HOOD_OFF_MS, turnHoodOff);
-    vacuum_task = timer.in(SPINDLE_OFF_TO_VACUUM_OFF_MS, turnVacuumOff);
+    air_timer.cancel();
+    hood_timer.cancel();
+    vacuum_timer.cancel();
+    air_timer.in(SPINDLE_OFF_TO_MIST_OFF_MS, turnAirOff);
+    hood_timer.in(SPINDLE_OFF_TO_HOOD_OFF_MS, turnHoodOff);
+    vacuum_timer.in(SPINDLE_OFF_TO_VACUUM_OFF_MS, turnVacuumOff);
   }
   if (laser_status.justTurnedOn()) {
     debug_string = "Laser turned on";
-    timer.cancel(air_task);
-    timer.cancel(hood_task);
-
+    air_timer.cancel();
+    hood_timer.cancel();
   }
   if (spindle_status.justTurnedOn()) {
     debug_string = "Spindle turned on";
-    timer.cancel(air_task);
-    timer.cancel(hood_task);
-    timer.cancel(vacuum_task);
+    air_timer.cancel();
+    hood_timer.cancel();
+    vacuum_timer.cancel();
   }
 
 
