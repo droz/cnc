@@ -97,6 +97,9 @@ struct Status {
 
 // This timer is used to delay some actions (like turning off the air after a while)
 Timer<16, millis> timer;
+Timer<16, millis>::Task air_task;
+Timer<16, millis>::Task hood_task;
+Timer<16, millis>::Task vacuum_task;
 
 // This class is used to track the status and history of some variables
 class OnOffVariable {
@@ -669,20 +672,26 @@ void loop() {
   // Set the hood, air and pump to turn off automatically after a while
   if (laser_status.justTurnedOff()) {
     debug_string = "Laser turned off";
-    timer.in(LASER_OFF_TO_AIR_OFF_MS, turnAirOff);
-    timer.in(LASER_OFF_TO_HOOD_OFF_MS, turnHoodOff);
+    air_task = timer.in(LASER_OFF_TO_AIR_OFF_MS, turnAirOff);
+    hood_task = timer.in(LASER_OFF_TO_HOOD_OFF_MS, turnHoodOff);
   }
   if (spindle_status.justTurnedOff()) {
     debug_string = "Spindle turned off";
-    timer.in(SPINDLE_OFF_TO_MIST_OFF_MS, turnAirOff);
-    timer.in(SPINDLE_OFF_TO_HOOD_OFF_MS, turnHoodOff);
-    timer.in(SPINDLE_OFF_TO_VACUUM_OFF_MS, turnVacuumOff);
+    air_task = timer.in(SPINDLE_OFF_TO_MIST_OFF_MS, turnAirOff);
+    hood_task = timer.in(SPINDLE_OFF_TO_HOOD_OFF_MS, turnHoodOff);
+    vacuum_task = timer.in(SPINDLE_OFF_TO_VACUUM_OFF_MS, turnVacuumOff);
   }
   if (laser_status.justTurnedOn()) {
     debug_string = "Laser turned on";
+    timer.cancel(air_task);
+    timer.cancel(hood_task);
+
   }
   if (spindle_status.justTurnedOn()) {
     debug_string = "Spindle turned on";
+    timer.cancel(air_task);
+    timer.cancel(hood_task);
+    timer.cancel(vacuum_task);
   }
 
 
