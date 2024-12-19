@@ -61,6 +61,12 @@ CRGB leds[NUM_LEDS];
 static uint32_t last_cmd_time = 0;
 #define CMD_TIMEOUT_MS 1000
 
+// Default pump interval, in ms
+#define DEFAULT_PUMP_INTERVAL_MS 10
+
+// The minimum PWM value. If the PWM is below this value, it is considered OFF
+#define MIN_PWM 5
+
 // A debug string
 static String debug_string = "";
 
@@ -181,7 +187,7 @@ static const int CMD_BUFFER_MAX_SIZE = 64;
 String cmd_buffer = "";
 
 // The current interval between pump steps, in ms
-uint16_t pump_interval_ms = 0;
+uint16_t pump_interval_ms = DEFAULT_PUMP_INTERVAL_MS;
 
 // The mode in which we operate the machine
 typedef enum {
@@ -205,7 +211,9 @@ typedef enum {
   // MIST: Mist pump
   CHIP_CTRL_MIST = 2,
   // VACUUUM: Vacuum
-  CHIP_CTRL_VACUUM = 4
+  CHIP_CTRL_VACUUM = 4,
+  // MANUAL: Manual control
+  CHIP_CTRL_MANUAL = 8,
 } Chipctrl;
 static uint8_t chip_ctrl = CHIP_CTRL_NOTHING;
 
@@ -254,6 +262,7 @@ void setup() {
   digitalWrite(PIN_PUMP_STEP, LOW);
   // Timer to trigger pump steps
   ITimer1.init();
+  updatePumpSpeed(pump_interval_ms);
 
   // Switches
   pinMode(PIN_DOOR, INPUT_PULLUP);
@@ -353,6 +362,7 @@ bool processCmd() {
     int new_mode;
     sscanf(cmd_buffer.c_str(), "mode=%d", &new_mode);
     if (new_mode == MODE_IDLE || new_mode == MODE_LASER || new_mode == MODE_ROUTER || new_mode == MODE_MANUAL) {
+      error = ERROR_NONE;
       mode = (Mode)new_mode;
       sendDone();
     } else {
@@ -530,6 +540,7 @@ void loop() {
   // If we have not received a command for a while, we go to IDLE mode
   if (mode != MODE_IDLE && millis() - last_cmd_time > CMD_TIMEOUT_MS) {
     debug_string = "mode timeout after " + String(millis() - last_cmd_time) + "ms";
+    error = ERROR_NONE;
     mode = MODE_IDLE;
   }
 
@@ -565,17 +576,9 @@ void loop() {
   vacuum_timer.tick();
 
   // Update some variables
-  laser_status.update(digitalRead(PIN_LASER) && analogRead(PIN_PWM));
-  spindle_status.update(digitalRead(PIN_SPINDLE) && analogRead(PIN_PWM));
+  laser_status.update(digitalRead(PIN_LASER) && analogRead(PIN_PWM) >= MIN_PWM);
+  spindle_status.update(digitalRead(PIN_SPINDLE) && analogRead(PIN_PWM) >= MIN_PWM);
   air_status.update(digitalRead(PIN_AIR));
-
-  // We can clear some errors when the conditions are met
-  if (!digitalRead(PIN_DOOR)) {
-    error &= ~ERROR_DOOR_OPEN;
-  }
-  if (!digitalRead(PIN_LASER_HEAD)) {
-    error &= ~ERROR_LASER_HEAD_PRESENT;
-  }
 
   // If we are in manual mode, we can skip all the following checks and automation
   if (mode == MODE_MANUAL) {
@@ -589,8 +592,7 @@ void loop() {
     digitalWrite(PIN_AIR, LOW);
     digitalWrite(PIN_VACUUM, LOW);
     digitalWrite(PIN_HOOD, LOW);
-    updatePumpSpeed(0);
-    ITimer1.stopTimer();
+    digitalWrite(PIN_PUMP_ENA, HIGH);
     return;
   }
 
@@ -609,12 +611,16 @@ void loop() {
     }
 
     // The door should be closed if the laser is on
-    if (laser_status.isOn() && digitalRead(PIN_DOOR)) {
+    if (digitalRead(PIN_DOOR)) {
       error |= ERROR_DOOR_OPEN;
+    } else {
+      error &= ~ERROR_DOOR_OPEN;
     }
     // The laser head should be present
     if (digitalRead(PIN_LASER_HEAD)) {
       error |= ERROR_LASER_HEAD_MISSING;
+    } else {
+      error &= ~ERROR_LASER_HEAD_MISSING;
     }
 
     // We can turn the laser on only if we are free of errors
@@ -630,35 +636,49 @@ void loop() {
     // The laser should be OFF
     digitalWrite(PIN_LASER, LOW);
 
-    // The pump should be ON when the spindle is on and the user requested it
-    // We also turn the hood and the air on
-    if (spindle_status.isOn() && (chip_ctrl & CHIP_CTRL_MIST)) {
-      digitalWrite(PIN_PUMP_ENA, LOW);
-      digitalWrite(PIN_HOOD, HIGH);
-      digitalWrite(PIN_AIR, HIGH);
-    }
+    // We can now manage all the chip control features, except if we are in manula chip control mode
+    if (!(chip_ctrl & CHIP_CTRL_MANUAL)) {
 
-    // The vacuum should be ON when the spindle is on and the user requested it
-    if (spindle_status.isOn() && (chip_ctrl & CHIP_CTRL_VACUUM)) {
-      digitalWrite(PIN_VACUUM, HIGH);
-    }
+      // The pump should be ON when the spindle is on and the user requested it
+      // We also turn the hood and the air on
+      if (spindle_status.isOn() && (chip_ctrl & CHIP_CTRL_MIST)) {
+        digitalWrite(PIN_PUMP_ENA, LOW);
+        digitalWrite(PIN_HOOD, HIGH);
+        digitalWrite(PIN_AIR, HIGH);
+      } else {
+        digitalWrite(PIN_PUMP_ENA, HIGH);
+        digitalWrite(PIN_HOOD, LOW);
+        digitalWrite(PIN_AIR, LOW);
+      }
 
-    // The air should be ON when the spindle is on and the user requested it
-    if (spindle_status.isOn() && (chip_ctrl & CHIP_CTRL_PUFF)) {
-      digitalWrite(PIN_AIR, HIGH);
+      // The vacuum should be ON when the spindle is on and the user requested it
+      if (spindle_status.isOn() && (chip_ctrl & CHIP_CTRL_VACUUM)) {
+        digitalWrite(PIN_VACUUM, HIGH);
+      } else {
+        digitalWrite(PIN_VACUUM, LOW);
+      }
+
+      // The air should be ON when the spindle is on and the user requested it
+      if (spindle_status.isOn() && (chip_ctrl & CHIP_CTRL_PUFF)) {
+        digitalWrite(PIN_AIR, HIGH);
+      } else {
+        digitalWrite(PIN_AIR, LOW);
+      }
     }
 
     // We don't care about the door
     // The laser head should not be present
     if (!digitalRead(PIN_LASER_HEAD)) {
       error |= ERROR_LASER_HEAD_PRESENT;
-    }
-    // We can turn the spindle on only if we are free of errors
-    if (error == ERROR_NONE) {
-      digitalWrite(PIN_SPINDLE, HIGH);
     } else {
-      digitalWrite(PIN_SPINDLE, LOW);
+      error &= ~ERROR_LASER_HEAD_PRESENT;
     }
+
+    // In Router mode, turning the spindle off when there are errors is actually a bad idea,
+    //  because GRBL is still going to move the CNC around and that would most likely break the tool.
+    //  So we don't turn the spindle off if there are errors.
+    //  It is the responsibility of Carbide Motion to ensure that the spindle turns off when it should.
+    digitalWrite(PIN_SPINDLE, HIGH);
   }
 
   // Check that the air pressure is correct when the air is on
@@ -669,6 +689,12 @@ void loop() {
     if (analogRead(PIN_PRESSURE) > MAX_AIR_PRESSURE) {
       error |= ERROR_HIGH_AIR_PRESSURE;
     }
+  }
+
+  // Clear the air pressure errors when the air is off
+  if (air_status.hasBeenOffFor(AIR_PRESSURE_CHECK_DELAY_MS)) {
+    error &= ~ERROR_LOW_AIR_PRESSURE;
+    error &= ~ERROR_HIGH_AIR_PRESSURE;
   }
 
   // Set the hood, air and pump to turn off automatically after a while

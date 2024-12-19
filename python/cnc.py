@@ -29,19 +29,25 @@ ERROR_MASK_LASER_HEAD_PRESENT = 8
 ERROR_MASK_DOOR_OPEN = 16
 
 # Chip control mode masks
+CHIP_CTRL_MASK_NONE = 0
 CHIP_CTRL_MASK_AIR = 1
 CHIP_CTRL_MASK_PUMP = 2
 CHIP_CTRL_MASK_VACUUM = 4
+CHIP_CTRL_MASK_MANUAL = 8
 
 # This associates the chip control mode to a mode string
 CHIP_CTRL_MODES = {
-    0: "None",
+    CHIP_CTRL_MASK_NONE: "None",
+    CHIP_CTRL_MASK_MANUAL: "Manual",
     CHIP_CTRL_MASK_AIR: "Puff",
     CHIP_CTRL_MASK_PUMP: "Mist",
     CHIP_CTRL_MASK_VACUUM: "Vacuum only",
     CHIP_CTRL_MASK_AIR | CHIP_CTRL_MASK_VACUUM: "Puff + Vacuum",
     CHIP_CTRL_MASK_PUMP | CHIP_CTRL_MASK_VACUUM: "Mist + Vacuum"
 }
+
+# Minimum PWM value to consider the laser on
+MIN_PWM = 5
 
 def resource_path(relative_path):
     """ Get absolute path to resource """
@@ -54,7 +60,6 @@ def resource_path(relative_path):
 
 def errorToString(error):
     """ This function is used to convert an error value to a string."""
-    print(error)
     str = ""
     if error & ERROR_MASK_AIR_PRESSURE_LOW:
         str += "Air pressure too low\n"
@@ -107,9 +112,7 @@ class ErrorText:
     """ This is used to implement a simple Error text indicator."""
     def __init__(self, window, title, row):
         self.window = window
-        self.frame = tk.LabelFrame(self.window, text="Error")
-        self.frame.grid(column=0, row=row, sticky=tk.W+tk.E, padx=3, pady=3)
-        self.text = tk.Label(self.frame, text="", font=("Arial", 11, "bold"), fg="red")
+        self.text = tk.Label(self.window, text="", font=("Arial", 11, "bold"), fg="red", justify="left")
         self.text.grid(column=0, row=0, padx=5, pady=2)
 
     def update(self, value):
@@ -554,7 +557,7 @@ class CNC:
             return
         errors = status["error"]
 
-        if (errors and (status["mode"] == CNC.Mode.LASER.value) and status["pwm"] and
+        if (errors and (status["mode"] == CNC.Mode.LASER.value) and status["pwm"] > MIN_PWM and
            (time.time() - self.last_pause_time > 1)):
             log.error("Error reported while laser is on. Sending pause command to Lightburn.")
             try:
@@ -594,64 +597,70 @@ class ManualGui(Gui):
         self.mode_frame = tk.LabelFrame(self.window, text="Mode")
         self.mode_frame.grid(column=0, row=0, sticky=tk.W+tk.E, padx=5, pady=5)
         self.mode = MultiChoice(self.mode_frame, "Mode", 0, ["Idle", "Router", "Laser", "Manual"], cnc.modeChange)
-        self.control = tk.LabelFrame(self.window, text="Control")
-        self.control.grid(column=0, row=1, sticky=tk.W+tk.E, padx=5, pady=5)
-        self.spindle_on = OnOffToggle(self.control, "Spindle", 0, cnc.spindleToggle)
-        self.laser_on = OnOffToggle(self.control, "Laser", 1, cnc.laserToggle)
-        self.vacuum_on = OnOffToggle(self.control, "Vacuum", 2, cnc.vacuumToggle)
-        self.hood_on = OnOffToggle(self.control, "Hood", 3, cnc.hoodToggle)
-        self.air_on = OnOffToggle(self.control, "Air", 4, cnc.airToggle)
-        self.pump_enable = OnOffToggle(self.control, "Coolant Pump", 5, cnc.pumpEnableToggle)
-        self.pump_speed = Slider(self.control, "Pump Speed", 6, 0, 100, cnc.pumpChange)
-        self.status = tk.LabelFrame(self.window, text="Status")
-        self.status.grid(column=0, row=2, sticky=tk.W+tk.E, padx=5, pady=5)
-        self.onoff_status = tk.Frame(self.status)
+        self.control_frame = tk.LabelFrame(self.window, text="Control")
+        self.control_frame.grid(column=0, row=1, sticky=tk.W+tk.E, padx=5, pady=5)
+        self.chip_ctrl = MultiChoice(self.control_frame, "Chip Control", 0, list(CHIP_CTRL_MODES.values()), cnc.chipCtrlChange)
+        self.spindle_on = OnOffToggle(self.control_frame, "Spindle", 1, cnc.spindleToggle)
+        self.laser_on = OnOffToggle(self.control_frame, "Laser", 2, cnc.laserToggle)
+        self.vacuum_on = OnOffToggle(self.control_frame, "Vacuum", 3, cnc.vacuumToggle)
+        self.hood_on = OnOffToggle(self.control_frame, "Hood", 4, cnc.hoodToggle)
+        self.air_on = OnOffToggle(self.control_frame, "Air", 5, cnc.airToggle)
+        self.pump_enable = OnOffToggle(self.control_frame, "Coolant Pump", 6, cnc.pumpEnableToggle)
+        self.pump_speed = Slider(self.control_frame, "Pump Speed", 7, 0, 100, cnc.pumpChange)
+        self.status_frame = tk.LabelFrame(self.window, text="Status")
+        self.status_frame.grid(column=0, row=2, sticky=tk.W+tk.E, padx=5, pady=5)
+        self.onoff_status = tk.Frame(self.status_frame)
         self.onoff_status.grid(column=0, row=0, sticky=tk.W+tk.E, padx=5, pady=5)
         self.door_closed = OnOffToggle(self.onoff_status, "Door Closed", 0, None, read_only=True)
         self.laser_present = OnOffToggle(self.onoff_status, "Laser Present", 1, None, read_only=True)
         self.force_vacuum = OnOffToggle(self.onoff_status, "Force Vacuum", 2, None, read_only=True)
-        self.gauge_status = tk.Frame(self.status)
+        self.gauge_status = tk.Frame(self.status_frame)
         self.gauge_status.grid(column=0, row=1, sticky=tk.W+tk.E, padx=5, pady=5)
         self.air_pressure = Gauge(self.gauge_status, "Air Pressure", 0, 0, 0, 100, 30)
         self.pwm = Gauge(self.gauge_status, "PWM", 0, 1, 0, 100, None)
+        self.error_frame = tk.LabelFrame(self.window, text="Error")
+        self.error_frame.grid(column=0, row=3, sticky=tk.W+tk.E, padx=5, pady=5)
+        self.error = ErrorText(self.error_frame, "Error", 0)
 
 class LaserGui(Gui):
     """ This class is used to create the GUI for the CNC controller in laser mode."""
     def __init__(self, cnc):
         super().__init__()
         self.window.title("CNC - Laser mode")
-        self.control = tk.LabelFrame(self.window, text="Control")
-        self.control.grid(column=0, row=0, sticky=tk.W+tk.E, padx=5, pady=5)
-        self.laser_on = OnOffToggle(self.control, "Laser", 0, cnc.laserToggle)
-        self.air_on = OnOffToggle(self.control, "Air", 1, cnc.airToggle)
-        self.vacuum_on = OnOffToggle(self.control, "Vacuum", 2, cnc.vacuumToggle)
-        self.hood_on = OnOffToggle(self.control, "Hood", 3, cnc.hoodToggle)
-        self.status = tk.LabelFrame(self.window, text="Status")
-        self.status.grid(column=0, row=1, sticky=tk.W+tk.E, padx=5, pady=5)
-        self.error = ErrorText(self.status, "Error", 0)
-        self.onoff_status = tk.Frame(self.status)
+        self.control_frame = tk.LabelFrame(self.window, text="Control")
+        self.control_frame.grid(column=0, row=0, sticky=tk.W+tk.E, padx=5, pady=5)
+        self.laser_on = OnOffToggle(self.control_frame, "Laser", 0, cnc.laserToggle)
+        self.air_on = OnOffToggle(self.control_frame, "Air", 1, cnc.airToggle)
+        self.vacuum_on = OnOffToggle(self.control_frame, "Vacuum", 2, cnc.vacuumToggle)
+        self.hood_on = OnOffToggle(self.control_frame, "Hood", 3, cnc.hoodToggle)
+        self.status_frame = tk.LabelFrame(self.window, text="Status")
+        self.status_frame.grid(column=0, row=1, sticky=tk.W+tk.E, padx=5, pady=5)
+        self.onoff_status = tk.Frame(self.status_frame)
         self.onoff_status.grid(column=0, row=1, sticky=tk.W+tk.E, padx=5, pady=5)
         self.door_closed = OnOffToggle(self.onoff_status, "Door Closed", 0, None, read_only=True)
         self.laser_present = OnOffToggle(self.onoff_status, "Laser Present", 1, None, read_only=True)
-        self.gauge_status = tk.Frame(self.status)
+        self.gauge_status = tk.Frame(self.status_frame)
         self.gauge_status.grid(column=0, row=2, sticky=tk.W+tk.E, padx=5, pady=5)
         self.air_pressure = Gauge(self.gauge_status, "Air Pressure", 0, 0, 0, 100, 30)
         self.pwm = Gauge(self.gauge_status, "PWM", 0, 1, 0, 100, None)
+        self.error_frame = tk.LabelFrame(self.window, text="Error")
+        self.error_frame.grid(column=0, row=2, sticky=tk.W+tk.E, padx=5, pady=5)
+        self.error = ErrorText(self.error_frame, "Error", 0)
 
 class RouterGui(Gui):
     """ This class is used to create the GUI for the CNC controller in router mode."""
     def __init__(self, cnc):
         super().__init__()
         self.window.title("CNC - Router mode")
-        self.control = tk.LabelFrame(self.window, text="Control")
-        self.control.grid(column=0, row=0, sticky=tk.W+tk.E, padx=5, pady=5)
-        self.chip_ctrl = MultiChoice(self.control, "Chip control", 0, list(CHIP_CTRL_MODES.values()), cnc.chipCtrlChange)
-        self.spindle_on = OnOffToggle(self.control, "Spindle", 1, cnc.spindleToggle)
-        self.air_on = OnOffToggle(self.control, "Air", 2, cnc.airToggle)
-        self.vacuum_on = OnOffToggle(self.control, "Vacuum", 3, cnc.vacuumToggle)
-        self.hood_on = OnOffToggle(self.control, "Hood", 4, cnc.hoodToggle)
-        self.pump_enable = OnOffToggle(self.control, "Coolant Pump", 5, cnc.pumpEnableToggle)
-        self.pump_speed = Slider(self.control, "Pump Speed", 6, 0, 100, cnc.pumpChange)
+        self.control_frame = tk.LabelFrame(self.window, text="Control")
+        self.control_frame.grid(column=0, row=0, sticky=tk.W+tk.E, padx=5, pady=5)
+        self.chip_ctrl = MultiChoice(self.control_frame, "Chip Control", 0, list(CHIP_CTRL_MODES.values()), cnc.chipCtrlChange)
+        self.spindle_on = OnOffToggle(self.control_frame, "Spindle", 1, cnc.spindleToggle)
+        self.air_on = OnOffToggle(self.control_frame, "Air", 2, cnc.airToggle)
+        self.vacuum_on = OnOffToggle(self.control_frame, "Vacuum", 3, cnc.vacuumToggle)
+        self.hood_on = OnOffToggle(self.control_frame, "Hood", 4, cnc.hoodToggle)
+        self.pump_enable = OnOffToggle(self.control_frame, "Coolant Pump", 5, cnc.pumpEnableToggle)
+        self.pump_speed = Slider(self.control_frame, "Pump Speed", 6, 0, 100, cnc.pumpChange)
         self.status = tk.LabelFrame(self.window, text="Status")
         self.status.grid(column=0, row=1, sticky=tk.W+tk.E, padx=5, pady=5)
         self.onoff_status = tk.Frame(self.status)
@@ -662,6 +671,9 @@ class RouterGui(Gui):
         self.gauge_status.grid(column=0, row=1, sticky=tk.W+tk.E, padx=5, pady=5)
         self.air_pressure = Gauge(self.gauge_status, "Air Pressure", 0, 0, 0, 100, 30)
         self.pwm = Gauge(self.gauge_status, "PWM", 0, 1, 0, 100, None)
+        self.error_frame = tk.LabelFrame(self.window, text="Error")
+        self.error_frame.grid(column=0, row=2, sticky=tk.W+tk.E, padx=5, pady=5)
+        self.error = ErrorText(self.error_frame, "Error", 0)
 
 def killProgramByName(name):
     """ This function is used to kill a specific controller program.
