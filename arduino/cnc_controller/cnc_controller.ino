@@ -570,7 +570,7 @@ void loop() {
   air_status.update(digitalRead(PIN_AIR));
 
   // We can clear some errors when the conditions are met
-  if (digitalRead(PIN_DOOR)) {
+  if (!digitalRead(PIN_DOOR)) {
     error &= ~ERROR_DOOR_OPEN;
   }
   if (!digitalRead(PIN_LASER_HEAD)) {
@@ -664,10 +664,10 @@ void loop() {
   // Check that the air pressure is correct when the air is on
   if (air_status.hasBeenOnFor(AIR_PRESSURE_CHECK_DELAY_MS)) {
     if (analogRead(PIN_PRESSURE) < MIN_AIR_PRESSURE) {
-      error = ERROR_LOW_AIR_PRESSURE;
+      error |= ERROR_LOW_AIR_PRESSURE;
     }
     if (analogRead(PIN_PRESSURE) > MAX_AIR_PRESSURE) {
-      error = ERROR_HIGH_AIR_PRESSURE;
+      error |= ERROR_HIGH_AIR_PRESSURE;
     }
   }
 

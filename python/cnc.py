@@ -54,6 +54,7 @@ def resource_path(relative_path):
 
 def errorToString(error):
     """ This function is used to convert an error value to a string."""
+    print(error)
     str = ""
     if error & ERROR_MASK_AIR_PRESSURE_LOW:
         str += "Air pressure too low\n"
@@ -398,6 +399,9 @@ class CNC:
         if not self.status:
             return
 
+        # Process any eventual error
+        self.manageErrors(self.status)
+
         # Check that the CNC is still in the expected mode
         if self.expected_mode and "mode" in self.status and self.status["mode"] != self.expected_mode.value:
             log.warning(f"Arduino is in mode {self.status['mode']} but we expected {self.expected_mode.value}. Chamging it back.")
@@ -460,7 +464,6 @@ class CNC:
         if hasattr(self.gui, "pwm") and "pwm" in self.status:
             self.gui.pwm.update(float(self.status["pwm"]) / 1024.0 * 100.0)
         if hasattr(self.gui, "error") and "error" in self.status:
-            self.manageErrors(self.status)
             self.gui.error.update(self.status["error"])
         # Now we can ask TK to re-render the GUI
         self.gui.update()
@@ -547,10 +550,12 @@ class CNC:
 
     def manageErrors(self, status):
         """ This function is used to manage the current error."""
+        if "error" not in status or "mode" not in status or "pwm" not in status:
+            return
         errors = status["error"]
 
         if (errors and (status["mode"] == CNC.Mode.LASER.value) and status["pwm"] and
-           (time.time() - self.last_pause_time > 0.5)):
+           (time.time() - self.last_pause_time > 1)):
             log.error("Error reported while laser is on. Sending pause command to Lightburn.")
             try:
                 self.app.top_window().type_keys("{VK_PAUSE}")
@@ -558,8 +563,7 @@ class CNC:
             except Exception as e:
                 log.error(f"Error sending pause command to Lightburn: {e}")
             error_string = errorToString(errors)
-            tkmessagebox.showerror("Error", "Errors were reported while trying to turn the laser on:\n\n" + error_string + "\n\nLightburn has been paused.")
-
+            self.gui.error_message = "Errors were reported while trying to turn the laser on:\n\n" + error_string + "\n\nLightburn has been paused."
 
 class Gui:
     """ This class is used to create a GUI for the CNC controller. """
@@ -567,7 +571,13 @@ class Gui:
         self.window = tk.Tk()
         self.window.protocol("WM_DELETE_WINDOW", self.onClosing)
         self.window.attributes("-topmost", True)
+        self.error_message = None
     def update(self):
+        if self.error_message:
+            # Add a little bit of delay before showing the error message. This will allow whatever code that is reacting to the error to do its job.
+            time.sleep(0.5)
+            tkmessagebox.showerror("Error", self.error_message)
+            self.error_message = None
         self.window.update_idletasks()
         self.window.update()
     def onClosing(self):
