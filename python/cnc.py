@@ -19,12 +19,29 @@ import psutil
 import pywinauto
 import struct
 import crc8
+import traceback
 
+# Error bit masks
 ERROR_MASK_AIR_PRESSURE_LOW = 1
 ERROR_MASK_AIR_PRESSURE_HIGH = 2
 ERROR_MASK_LASER_HEAD_MISSING = 4
 ERROR_MASK_LASER_HEAD_PRESENT = 8
 ERROR_MASK_DOOR_OPEN = 16
+
+# Chip control mode masks
+CHIP_CTRL_MASK_AIR = 1
+CHIP_CTRL_MASK_PUMP = 2
+CHIP_CTRL_MASK_VACUUM = 4
+
+# This associates the chip control mode to a mode string
+CHIP_CTRL_MODES = {
+    0: "None",
+    CHIP_CTRL_MASK_AIR: "Puff",
+    CHIP_CTRL_MASK_PUMP: "Mist",
+    CHIP_CTRL_MASK_VACUUM: "Vacuum only",
+    CHIP_CTRL_MASK_AIR | CHIP_CTRL_MASK_VACUUM: "Puff + Vacuum",
+    CHIP_CTRL_MASK_PUMP | CHIP_CTRL_MASK_VACUUM: "Mist + Vacuum"
+}
 
 def resource_path(relative_path):
     """ Get absolute path to resource """
@@ -111,7 +128,10 @@ class MultiChoice:
         self.text.grid(column=0, row=row, padx=5, pady=2)
 
     def update(self, value):
-        self.value.set(self.choices[value])
+        if isinstance(value, int):
+            self.value.set(self.choices[value])
+        else:
+            self.value.set(value)
 
     def changed(self, value):
         self.callback(self)
@@ -247,8 +267,8 @@ class ArduinoInterface:
             # Type conversions where needed
             if "mode" in status:
                 status["mode"] = int(status["mode"])
-            if "submode" in status:
-                status["submode"] = int(status["submode"])
+            if "chip_ctrl" in status:
+                status["chip_ctrl"] = int(status["chip_ctrl"])
             if "door" in status:
                 status["door"] = bool(int(status["door"]))
             if "laser_head" in status:
@@ -308,7 +328,7 @@ class ArduinoInterface:
             response = struct.unpack(format, payload)
             status = {
                 "mode" : int(response[0]),
-                "submode" : int(response[1]),
+                "chip_ctrl" : int(response[1]),
                 "door" : bool(response[2] & 1),
                 "laser_head" : bool(response[2] & 2),
                 "force_vacuum" : bool(response[2] & 4),
@@ -403,6 +423,11 @@ class CNC:
             return
         if hasattr(self.gui, "mode") and "mode" in self.status:
             self.gui.mode.update(self.status["mode"])
+        if hasattr(self.gui, "chip_ctrl") and "chip_ctrl" in self.status:
+            if self.status["chip_ctrl"] in CHIP_CTRL_MODES:
+                self.gui.chip_ctrl.update(CHIP_CTRL_MODES[self.status["chip_ctrl"]])
+            else:
+                log.warning(f"Invalid chip control mode {self.status['chip_ctrl']}")
         if hasattr(self.gui, "air_on") and "air" in self.status:
             self.gui.air_on.update(self.status["air"])
         if hasattr(self.gui, "vacuum_on") and "vacuum" in self.status:
@@ -413,6 +438,8 @@ class CNC:
             self.gui.spindle_on.update(self.status["spindle"])
         if hasattr(self.gui, "laser_on") and "laser" in self.status:
             self.gui.laser_on.update(self.status["laser"])
+        if hasattr(self.gui, "pump_enable") and "pump_enable" in self.status:
+            self.gui.pump_enable.update(self.status["pump_enable"])
         if hasattr(self.gui, "pump_speed") and "pump_interval_ms" in self.status:
             pump_interval_ms = self.status["pump_interval_ms"]
             if pump_interval_ms == 0:
@@ -438,7 +465,6 @@ class CNC:
         # Now we can ask TK to re-render the GUI
         self.gui.update()
 
-
     def modeChange(self, choice):
         """ This function is used to change the mode of the CNC."""
         if choice.value.get() == "Manual":
@@ -456,6 +482,25 @@ class CNC:
     def modeSet(self, mode):
         """ This function is used to set the mode of the CNC."""
         self.arduino.writeValue("mode", str(mode.value))
+
+    def chipCtrlChange(self, choice):
+        """ This function is used to change the chip control mode of the CNC."""
+        reverse_lookup = {v: k for k, v in CHIP_CTRL_MODES.items()}
+        if choice.value.get() in reverse_lookup:
+            self.chipCtrlSet(reverse_lookup[choice.value.get()])
+        else:
+            raise Exception(f"Invalid chip control mode {choice.value.get()}")
+        
+    def chipCtrlSet(self, chip_ctrl):
+        """ This function is used to set the chip control mode of the CNC."""
+        self.arduino.writeValue("chip_ctrl", str(chip_ctrl))
+
+    def pumpEnableToggle(self, toggle):
+        """ This function is used to toggle the stepper enable."""
+        if toggle.state:
+            self.arduino.writeValue("pump_enable", "1")
+        else:
+            self.arduino.writeValue("pump_enable", "0")
 
     def pumpChange(self, slider):
         """ This function is used to change the stepper speed."""
@@ -546,7 +591,8 @@ class ManualGui(Gui):
         self.vacuum_on = OnOffToggle(self.control, "Vacuum", 2, cnc.vacuumToggle)
         self.hood_on = OnOffToggle(self.control, "Hood", 3, cnc.hoodToggle)
         self.air_on = OnOffToggle(self.control, "Air", 4, cnc.airToggle)
-        self.pump_speed = Slider(self.control, "Coolant Pump", 5, 0, 100, cnc.pumpChange)
+        self.pump_enable = OnOffToggle(self.control, "Coolant Pump", 5, cnc.pumpEnableToggle)
+        self.pump_speed = Slider(self.control, "Pump Speed", 6, 0, 100, cnc.pumpChange)
         self.status = tk.LabelFrame(self.window, text="Status")
         self.status.grid(column=0, row=2, sticky=tk.W+tk.E, padx=5, pady=5)
         self.onoff_status = tk.Frame(self.status)
@@ -589,11 +635,13 @@ class RouterGui(Gui):
         self.window.title("CNC - Router mode")
         self.control = tk.LabelFrame(self.window, text="Control")
         self.control.grid(column=0, row=0, sticky=tk.W+tk.E, padx=5, pady=5)
-        self.spindle_on = OnOffToggle(self.control, "Spindle", 0, cnc.spindleToggle)
-        self.air_on = OnOffToggle(self.control, "Air", 1, cnc.airToggle)
-        self.vacuum_on = OnOffToggle(self.control, "Vacuum", 2, cnc.vacuumToggle)
-        self.hood_on = OnOffToggle(self.control, "Hood", 3, cnc.hoodToggle)
-        self.pump_speed = Slider(self.control, "Pump Speed", 4, 0, 100, cnc.pumpChange)
+        self.chip_ctrl = MultiChoice(self.control, "Chip control", 0, list(CHIP_CTRL_MODES.values()), cnc.chipCtrlChange)
+        self.spindle_on = OnOffToggle(self.control, "Spindle", 1, cnc.spindleToggle)
+        self.air_on = OnOffToggle(self.control, "Air", 2, cnc.airToggle)
+        self.vacuum_on = OnOffToggle(self.control, "Vacuum", 3, cnc.vacuumToggle)
+        self.hood_on = OnOffToggle(self.control, "Hood", 4, cnc.hoodToggle)
+        self.pump_enable = OnOffToggle(self.control, "Coolant Pump", 5, cnc.pumpEnableToggle)
+        self.pump_speed = Slider(self.control, "Pump Speed", 6, 0, 100, cnc.pumpChange)
         self.status = tk.LabelFrame(self.window, text="Status")
         self.status.grid(column=0, row=1, sticky=tk.W+tk.E, padx=5, pady=5)
         self.onoff_status = tk.Frame(self.status)
@@ -707,7 +755,7 @@ def runCNC():
         cnc.app = pywinauto.Application().start(args.shapeoko_exec)
         # Changing the Arduino to Router mode
         log.info("Configuring the Arduino board to run in router mode...")
-        self.expected_mode = CNC.Mode.ROUTER
+        cnc.expected_mode = CNC.Mode.ROUTER
         cnc.modeSet(CNC.Mode.ROUTER)
         log.info("  Configured")
 
@@ -730,9 +778,9 @@ def runCNC():
                 break
     except KeyboardInterrupt:
         log.info("Exiting...")
-    except Exception as e:
+    except Exception:
         cnc.exit_event.set()
-        log.error(f"Error: {e}")
+        log.error(traceback.format_exc())
 
     # Close the connection to the Arduino board
     cnc.exit_event.set()

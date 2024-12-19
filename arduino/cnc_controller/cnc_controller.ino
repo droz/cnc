@@ -68,8 +68,8 @@ static String debug_string = "";
 struct Status {
   // The current mode
   uint8_t mode;
-  // The current submode
-  uint8_t submode;
+  // The current chip control mode
+  uint8_t chip_ctrl;
   // The status of the pins
   //  BIT0: door
   //  BIT1: laser_head
@@ -196,18 +196,18 @@ typedef enum {
 } Mode;
 static Mode mode = MODE_IDLE;
 
-// The submode in which we operate the machine
+// The chip control mode
 typedef enum {
   // NOTHING: Nothing should happen
-  SUBMODE_NOTHING = 0,
-  // AIR: Air is on
-  SUBMODE_AIR = 1,
-  // PUMP: Pump is on
-  SUBMODE_PUMP = 2,
-  // VACUUUM: Vacuum is on
-  SUBMODE_VACUUM = 4
-} Submode;
-static uint8_t submode = SUBMODE_NOTHING;
+  CHIP_CTRL_NOTHING = 0,
+  // PUFF: Air valve
+  CHIP_CTRL_PUFF = 1,
+  // MIST: Mist pump
+  CHIP_CTRL_MIST = 2,
+  // VACUUUM: Vacuum
+  CHIP_CTRL_VACUUM = 4
+} Chipctrl;
+static uint8_t chip_ctrl = CHIP_CTRL_NOTHING;
 
 // The error codes
 typedef enum {
@@ -294,7 +294,7 @@ bool processCmd() {
     // Binary status
     Status status;
     status.mode = mode;
-    status.submode = submode;
+    status.chip_ctrl = chip_ctrl;
     status.pins = 0;
     status.pins |= !digitalRead(PIN_DOOR) << 0;
     status.pins |= !digitalRead(PIN_LASER_HEAD) << 1;
@@ -327,7 +327,7 @@ bool processCmd() {
   if (cmd_buffer.startsWith("status")) {
     // Send status
     Serial.println("mode=" + String(mode));
-    Serial.println("submode=" + String(submode));
+    Serial.println("chip_ctrl=" + String(chip_ctrl));
     Serial.println("door=" + String(!digitalRead(PIN_DOOR)));
     Serial.println("laser_head=" + String(!digitalRead(PIN_LASER_HEAD)));
     Serial.println("force_vacuum=" + String(!digitalRead(PIN_VACUUM_FORCE)));
@@ -365,11 +365,11 @@ bool processCmd() {
     Serial.println("ignored");
     return true;
   }
-  if (cmd_buffer.startsWith("submode=")) {
-    // Set submode
-    int new_submode;
-    sscanf(cmd_buffer.c_str(), "submode=%d", &new_submode);
-    submode = new_submode;
+  if (cmd_buffer.startsWith("chip_ctrl=")) {
+    // Set chip control
+    int new_chip_ctrl;
+    sscanf(cmd_buffer.c_str(), "chip_ctrl=%d", &new_chip_ctrl);
+    chip_ctrl = new_chip_ctrl;
     sendDone();
     return true;
   }
@@ -632,19 +632,19 @@ void loop() {
 
     // The pump should be ON when the spindle is on and the user requested it
     // We also turn the hood and the air on
-    if (spindle_status.isOn() && (submode & SUBMODE_PUMP)) {
+    if (spindle_status.isOn() && (chip_ctrl & CHIP_CTRL_MIST)) {
       digitalWrite(PIN_PUMP_ENA, LOW);
       digitalWrite(PIN_HOOD, HIGH);
       digitalWrite(PIN_AIR, HIGH);
     }
 
     // The vacuum should be ON when the spindle is on and the user requested it
-    if (spindle_status.isOn() && (submode & SUBMODE_VACUUM)) {
+    if (spindle_status.isOn() && (chip_ctrl & CHIP_CTRL_VACUUM)) {
       digitalWrite(PIN_VACUUM, HIGH);
     }
 
     // The air should be ON when the spindle is on and the user requested it
-    if (spindle_status.isOn() && (submode & SUBMODE_AIR)) {
+    if (spindle_status.isOn() && (chip_ctrl & CHIP_CTRL_PUFF)) {
       digitalWrite(PIN_AIR, HIGH);
     }
 
