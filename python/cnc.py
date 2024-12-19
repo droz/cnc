@@ -3,9 +3,10 @@ It connects to a GRBL controller and an Arduino board through USB.
 Depending if the laser head is connected, it will either run the CNC
 program (Shapeoko) or the laser program (Lightburn)."""
 
+import logging as log
 import tkinter as tk
-import tkinter.messagebox as tkmessagebox
 import tkdial as tkdial
+import threading
 import argparse
 import time
 import serial
@@ -14,7 +15,15 @@ import os
 import re
 import enum
 import psutil
-import subprocess
+import pywinauto
+import struct
+import crc8
+
+ERROR_MASK_AIR_PRESSURE_LOW = 1
+ERROR_MASK_AIR_PRESSURE_HIGH = 2
+ERROR_MASK_LASER_HEAD_MISSING = 4
+ERROR_MASK_LASER_HEAD_PRESENT = 8
+ERROR_MASK_DOOR_OPEN = 16
 
 def resource_path(relative_path):
     """ Get absolute path to resource """
@@ -25,6 +34,22 @@ def resource_path(relative_path):
         base_path = os.path.abspath(".")
     return os.path.join(base_path, 'images', relative_path)
 
+def errorToString(error):
+    """ This function is used to convert an error value to a string."""
+    str = ""
+    if error & ERROR_MASK_AIR_PRESSURE_LOW:
+        str += "Air pressure too low\n"
+    if error & ERROR_MASK_AIR_PRESSURE_HIGH:
+        str += "Air pressure too high\n"
+    if error & ERROR_MASK_LASER_HEAD_MISSING:
+        str += "Laser head missing\n"
+    if error & ERROR_MASK_LASER_HEAD_PRESENT:
+        str += "Laser head present\n"
+    if error & ERROR_MASK_DOOR_OPEN:
+        str += "Door open\n"
+    if str:
+        str = str[:-1]
+    return str
 
 class OnOffToggle:
     """ This is used to implement a simple ON/OFF toggle button."""
@@ -57,6 +82,33 @@ class OnOffToggle:
         self.state = not self.state
         self.update(self.state)
         self.callback(self)
+
+
+class ErrorText:
+    """ This is used to implement a simple Error text indicator."""
+    def __init__(self, window, title, row):
+        self.window = window
+        self.frame = tk.LabelFrame(self.window, text="Error")
+        self.frame.grid(column=0, row=row, sticky=tk.W+tk.E, padx=10, pady=10)
+        self.text = tk.Label(self.frame, text="", font=("Arial", 18, "bold"), fg="red")
+        self.text.grid(column=0, row=0, padx=10, pady=5)
+
+    def update(self, value):
+        str = ""
+        if value & ERROR_MASK_AIR_PRESSURE_LOW:
+            str += "Air pressure too low\n"
+        if value & ERROR_MASK_AIR_PRESSURE_HIGH:
+            str += "Air pressure too high\n"
+        if value & ERROR_MASK_LASER_HEAD_MISSING:
+            str += "Laser head missing\n"
+        if value & ERROR_MASK_LASER_HEAD_PRESENT:
+            str += "Laser head present\n"
+        if value & ERROR_MASK_DOOR_OPEN:
+            str += "Door open\n"
+        if str:
+            str = str[:-1]
+        error_string = errorToString(value)
+        self.text.config(text=error_string)
 
 class MultiChoice:
     """ This is used to implement a simple multi-choice button."""
@@ -113,9 +165,10 @@ class Gauge:
 class GrblInterface:
     """ This class is used to interface with the GRBL controller."""
     def __init__(self, port):
-        print(f"Connecting to GRBL controller on port {port}")
+        log.info(f"Connecting to GRBL controller on port {port}")
         self.serial = serial.Serial(port, 115200, timeout=60)
         self.wakeUp()
+        log.info(f"  Connected")
 
     def wakeUp(self):
         """ This function is used to wake up the GRBL controller."""
@@ -163,7 +216,7 @@ class GrblInterface:
 
     def home(self):
         """ This function is used to home the GRBL controller."""
-        print("Homing the machine...")
+        log.info("Homing the machine...")
         # Send the homing command
         self.serial.write("$H\n".encode('utf-8'))
         # Wait for the OK to come back
@@ -176,17 +229,19 @@ class GrblInterface:
         response = self.serial.read_all().decode('utf-8').replace('\r', '')
         if response != 'ok\n':
             raise Exception(f"Error waiting for home")
-        print("Machine homed")
+        log.info("  Machine homed")
 
 class ArduinoInterface:
     """ This class is used to interface with the Arduino board."""
     def __init__(self, port):
-        print(f"Connecting to Arduino board on port {port}")
+        log.info(f"Connecting to Arduino board on port {port}")
         self.serial = serial.Serial(port, 115200, timeout=1)
         time.sleep(2)
+        log.info(f"  Connected")
 
-    def readStatus(self):
-        """ This function is used to read the status of the Arduino board.
+    def readAsciiStatus(self):
+        """ This function is used to read the status of the Arduino board,
+            using a human readable ASCII scheme.
         Returns:
             A dictionary of values indexed by string key."""
         self.serial.write(b"status\n")
@@ -199,7 +254,97 @@ class ArduinoInterface:
                 key = result.group(1)
                 value = result.group(2)
                 status[key] = value
+        # Type conversions where needed
+        if "mode" in status:
+            status["mode"] = int(status["mode"])
+        if "submode" in status:
+            status["submode"] = int(status["submode"])
+        if "door" in status:
+            status["door"] = bool(int(status["door"]))
+        if "laser_head" in status:
+            status["laser_head"] = bool(int(status["laser_head"]))
+        if "force_vacuum" in status:
+            status["force_vacuum"] = bool(int(status["force_vacuum"]))
+        if "vacuum" in status:
+            status["vacuum"] = bool(int(status["vacuum"]))
+        if "hood" in status:
+            status["hood"] = bool(int(status["hood"]))
+        if "spindle" in status:
+            status["spindle"] = bool(int(status["spindle"]))
+        if "laser" in status:
+            status["laser"] = bool(int(status["laser"]))
+        if "air" in status:
+            status["air"] = bool(int(status["air"]))
+        if "pump_enable" in status:
+            status["pump_enable"] = bool(int(status["pump_enable"]))
+        if "pressure" in status:
+            status["pressure"] = int(status["pressure"])
+        if "pwm" in status:
+            status["pwm"] = int(status["pwm"])
+        if "pump_interval_ms" in status:
+            status["pump_interval_ms"] = int(status["pump_interval_ms"])
+        if "error" in status:
+            status["error"] = int(status["error"])
+        if "debug_length" in status:
+            status["debug_length"] = int(status["debug_length"])
+
         return status
+
+    def readBinaryStatus(self):
+        """ This function is used to read the status of the Arduino board,
+            using a binary scheme.
+        Returns:
+            A dictionary of values indexed by string key."""
+        format = "<BBHHHHHB"        
+        expected_size = struct.calcsize(format)
+        self.serial.write(b"bstatus\n")
+        size = int(self.serial.read(1)[0])
+        if (size != expected_size):
+            log.warning(f"Error reading binary status, expected {expected_size} bytes, got {size} bytes")
+            time.sleep(0.1)
+            self.serial.read_all()
+            return None
+        payload = self.serial.read(size)
+        crc = self.serial.read(1)
+        hash = crc8.crc8()
+        hash.update(payload)
+        if crc[0] != hash.digest()[0]:
+            log.warning("CRC error")
+            time.sleep(0.1)
+            self.serial.read_all()
+            return None
+
+        response = struct.unpack(format, payload)
+        status = {
+            "mode" : int(response[0]),
+            "submode" : int(response[1]),
+            "door" : bool(response[2] & 1),
+            "laser_head" : bool(response[2] & 2),
+            "force_vacuum" : bool(response[2] & 4),
+            "vacuum" : bool(response[2] & 8),
+            "hood" : bool(response[2] & 16),
+            "spindle" : bool(response[2] & 32),
+            "laser" : bool(response[2] & 64),
+            "air" : bool(response[2] & 128),
+            "pump_enable" : bool(response[2] & 256),
+            "pressure" : int(response[3]),
+            "pwm" : int(response[4]),
+            "pump_interval_ms" : int(response[5]),
+            "error" : int(response[6]),
+            "debug_length" : int(response[7])
+        }
+        return status
+
+    def readValue(self, key):
+        """ This function is used to read a setting to the Arduino board.
+        Args:
+            key: The string key of the setting.
+        Returns:
+            The value of the setting."""
+        self.serial.write(f"{key}\n".encode('utf-8'))
+        time.sleep(0.1)
+        response = self.serial.read_all().decode('utf-8').replace('\r', '').replace('\n', '')
+        return response
 
     def writeValue(self, key, value):
         """ This function is used to write a setting to the Arduino board.
@@ -226,47 +371,59 @@ class CNC:
         if arduino_port:
             self.arduino = ArduinoInterface(arduino_port)
         self.gui = None
-        self.process = None
+        self.app = None
+        self.last_errors = 0
+        self.last_pause_time = 0
 
     def update(self):
         # Read the status of the Arduino board
-        status = self.arduino.readStatus()
+        status = self.arduino.readBinaryStatus()
+        #status = self.arduino.readAsciiStatus()
+        if not status:
+            return
 
         # Update the UI if needed
         if not self.gui:
             return
         if hasattr(self.gui, "mode") and "mode" in status:
-            self.gui.mode.update(int(status["mode"]))
+            self.gui.mode.update(status["mode"])
         if hasattr(self.gui, "air_on") and "air" in status:
-            self.gui.air_on.update(status["air"] == "1")
+            self.gui.air_on.update(status["air"])
         if hasattr(self.gui, "vacuum_on") and "vacuum" in status:
-            self.gui.vacuum_on.update(status["vacuum"] == "1")
+            self.gui.vacuum_on.update(status["vacuum"])
         if hasattr(self.gui, "hood_on") and "hood" in status:
-            self.gui.hood_on.update(status["hood"] == "1")
+            self.gui.hood_on.update(status["hood"])
         if hasattr(self.gui, "spindle_on") and "spindle" in status:
-            self.gui.spindle_on.update(status["spindle"] == "1")
+            self.gui.spindle_on.update(status["spindle"])
         if hasattr(self.gui, "laser_on") and "laser" in status:
-            self.gui.laser_on.update(status["laser"] == "1")
+            self.gui.laser_on.update(status["laser"])
         if hasattr(self.gui, "pump_speed") and "pump_interval_ms" in status:
-            pump_interval_ms = int(status["pump_interval_ms"])
+            pump_interval_ms = status["pump_interval_ms"]
             if pump_interval_ms == 0:
                 self.gui.pump_speed.value.set(0)
             else:
                 self.gui.pump_speed.value.set(200 / pump_interval_ms)
         if hasattr(self.gui, "door_closed") and "door" in status:
-            self.gui.door_closed.update(status["door"] == "1")
+            self.gui.door_closed.update(status["door"])
         if hasattr(self.gui, "laser_present") and "laser_head" in status:
-            self.gui.laser_present.update(status["laser_head"] == "1")
+            self.gui.laser_present.update(status["laser_head"])
         if hasattr(self.gui, "force_vacuum") and "force_vacuum" in status:
-            self.gui.force_vacuum.update(status["force_vacuum"] == "1")
+            self.gui.force_vacuum.update(status["force_vacuum"])
         if hasattr(self.gui, "air_pressure") and "pressure" in status:
-            pressure_int = int(status["pressure"])
-            pressure_psi = (pressure_int - 104.0) / 1024.0 * 100.0
+            pressure_psi = (status["pressure"] - 104.0) / 1024.0 * 100.0
             if pressure_psi < 0:
                 pressure_psi = 0
             self.gui.air_pressure.update(pressure_psi)
         if hasattr(self.gui, "pwm") and "pwm" in status:
             self.gui.pwm.update(float(status["pwm"]) / 1024.0 * 100.0)
+        if hasattr(self.gui, "error") and "error" in status:
+            self.manageErrors(status)
+            self.gui.error.update(status["error"])
+
+        # If there is a debug message waiting, pull it        
+        if "debug_length" in status and status["debug_length"]:
+            debug = self.arduino.readValue("debug")
+            log.info("Arduino says: " + debug)
 
     def modeChange(self, choice):
         """ This function is used to change the mode of the CNC."""
@@ -329,6 +486,23 @@ class CNC:
         else:
             self.arduino.writeValue("laser", "0")
 
+    def manageErrors(self, status):
+        """ This function is used to manage the current error."""
+        errors = status["error"]
+        new_errors = errors & ~self.last_errors
+        cleared_errors = self.last_errors & ~errors
+
+        if (errors and (status["mode"] == CNC.Mode.LASER.value) and status["pwm"] and
+           (time.time() - self.last_pause_time > 0.5)):
+            log.error("Error reported while laser is on. Sending pause command to Lightburn.")
+            try:
+                self.app.top_window().type_keys("{VK_PAUSE}")
+                self.last_pause_time = time.time()
+            except Exception as e:
+                log.error(f"Error sending pause command to Lightburn: {e}")
+
+        self.last_errors = errors
+
 class Gui:
     """ This class is used to create a GUI for the CNC controller. """
     def __init__(self):
@@ -338,10 +512,8 @@ class Gui:
         self.window.update_idletasks()
         self.window.update()
     def onClosing(self):
-        if tkmessagebox.askokcancel("Quit", "Exit the controller and close application ?"):
-            self.window.destroy()
-            self.window = None
-
+        self.window.destroy()
+        self.window = None
 
 class ManualGui(Gui):
     """ This class is used to create the GUI for the CNC controller in manual mode."""
@@ -355,17 +527,16 @@ class ManualGui(Gui):
         self.control.grid(column=0, row=1, sticky=tk.W+tk.E, padx=10, pady=10)
         self.spindle_on = OnOffToggle(self.control, "Spindle", 0, cnc.spindleToggle)
         self.laser_on = OnOffToggle(self.control, "Laser", 1, cnc.laserToggle)
-        self.air_on = OnOffToggle(self.control, "Air", 2, cnc.airToggle)
-        self.vacuum_on = OnOffToggle(self.control, "Vacuum", 3, cnc.vacuumToggle)
-        self.hood_on = OnOffToggle(self.control, "Hood", 4, cnc.hoodToggle)
-        self.pump_speed = Slider(self.control, "Pump Speed", 5, 0, 100, cnc.pumpChange)
+        self.vacuum_on = OnOffToggle(self.control, "Vacuum", 2, cnc.vacuumToggle)
+        self.hood_on = OnOffToggle(self.control, "Hood", 3, cnc.hoodToggle)
+        self.air_on = OnOffToggle(self.control, "Air", 4, cnc.airToggle)
+        self.pump_speed = Slider(self.control, "Coolant Pump", 5, 0, 100, cnc.pumpChange)
         self.status = tk.LabelFrame(self.window, text="Status")
         self.status.grid(column=0, row=2, sticky=tk.W+tk.E, padx=10, pady=10)
         self.onoff_status = tk.Frame(self.status)
         self.onoff_status.grid(column=0, row=0, sticky=tk.W+tk.E, padx=10, pady=10)
         self.door_closed = OnOffToggle(self.onoff_status, "Door Closed", 0, None, read_only=True)
         self.laser_present = OnOffToggle(self.onoff_status, "Laser Present", 1, None, read_only=True)
-        self.force_vacuum = OnOffToggle(self.onoff_status, "Force Vacuum", 2, None, read_only=True)
         self.gauge_status = tk.Frame(self.status)
         self.gauge_status.grid(column=0, row=1, sticky=tk.W+tk.E, padx=10, pady=10)
         self.air_pressure = Gauge(self.gauge_status, "Air Pressure", 0, 0, 0, 100, 30)
@@ -384,13 +555,13 @@ class LaserGui(Gui):
         self.hood_on = OnOffToggle(self.control, "Hood", 3, cnc.hoodToggle)
         self.status = tk.LabelFrame(self.window, text="Status")
         self.status.grid(column=0, row=1, sticky=tk.W+tk.E, padx=10, pady=10)
+        self.error = ErrorText(self.status, "Error", 0)
         self.onoff_status = tk.Frame(self.status)
-        self.onoff_status.grid(column=0, row=0, sticky=tk.W+tk.E, padx=10, pady=10)
+        self.onoff_status.grid(column=0, row=1, sticky=tk.W+tk.E, padx=10, pady=10)
         self.door_closed = OnOffToggle(self.onoff_status, "Door Closed", 0, None, read_only=True)
         self.laser_present = OnOffToggle(self.onoff_status, "Laser Present", 1, None, read_only=True)
-        self.force_vacuum = OnOffToggle(self.onoff_status, "Force Vacuum Switch", 2, None, read_only=True)
         self.gauge_status = tk.Frame(self.status)
-        self.gauge_status.grid(column=0, row=1, sticky=tk.W+tk.E, padx=10, pady=10)
+        self.gauge_status.grid(column=0, row=2, sticky=tk.W+tk.E, padx=10, pady=10)
         self.air_pressure = Gauge(self.gauge_status, "Air Pressure", 0, 0, 0, 100, 30)
         self.pwm = Gauge(self.gauge_status, "PWM", 0, 1, 0, 100, None)
 
@@ -412,7 +583,6 @@ class RouterGui(Gui):
         self.onoff_status.grid(column=0, row=0, sticky=tk.W+tk.E, padx=10, pady=10)
         self.door_closed = OnOffToggle(self.onoff_status, "Door Closed", 0, None, read_only=True)
         self.laser_present = OnOffToggle(self.onoff_status, "Laser Present", 1, None, read_only=True)
-        self.force_vacuum = OnOffToggle(self.onoff_status, "Force Vacuum Switch", 2, None, read_only=True)
         self.gauge_status = tk.Frame(self.status)
         self.gauge_status.grid(column=0, row=1, sticky=tk.W+tk.E, padx=10, pady=10)
         self.air_pressure = Gauge(self.gauge_status, "Air Pressure", 0, 0, 0, 100, 30)
@@ -426,11 +596,16 @@ def killProgramByName(name):
     # List all running processes
     for proc in psutil.process_iter():
         if proc.name() == name:
-            print(f"Killing {proc.name()}")
+            log.info(f"Killing {proc.name()}")
             proc.kill()
 
 def runCNC():
     """ This function is used to run the CNC controller program."""
+
+    # Setup the logging format to display time
+    log.basicConfig(format='%(asctime)s - %(message)s', level=log.INFO)
+
+    # Parse the command line arguments
     arg_parser = argparse.ArgumentParser(description="CNC controller")
     arg_parser.add_argument("--grbl_port", help="COM port connected to the GRBL controller", default="COM6", type=str)
     arg_parser.add_argument("--arduino_port", help="COM port connected to the Arduino board", default="COM7", type=str)
@@ -452,18 +627,17 @@ def runCNC():
     else:
         cnc = CNC(None, args.arduino_port)
 
-
     # Now what we do depends on the mode
     if args.manual:
         # Change mode
-        print("Configuring the GRBL controller to run in manual mode...")
+        log.info("Configuring the GRBL controller to run in manual mode...")
         cnc.modeSet(CNC.Mode.MANUAL)
+        log.info("  Configured")
         # Create the GUI
         cnc.gui = ManualGui(cnc)
 
     if args.laser:
-        print("Configuring the GRBL controller to run in laser mode...")
-        cnc.modeSet(CNC.Mode.LASER)
+        log.info("Configuring the GRBL controller to run in laser mode...")
         # We first connect to the GRBL controller and make sure that we send the correct settings
         # Do not report anything back except status
         cnc.grbl.writeSettings(10, 0)
@@ -479,15 +653,19 @@ def runCNC():
         cnc.grbl.sendCommand("G10 L2 P1 X-845 Y-845")
         # Close the connection to the GRBL controller
         cnc.grbl.close()
+        log.info("  Configured")
         # Create the GUI
         cnc.gui = LaserGui(cnc)
         # Then we can open the Lightburn program
-        print("Starting Lightburn...")
-        cnc.process = subprocess.Popen(args.lighburn_exec)
+        log.info("Starting Lightburn...")
+        cnc.app = pywinauto.Application().start(args.lighburn_exec)
+        # Changing the Arduino to Laser mode
+        log.info("Configuring the Arduino board to run in laser mode...")
+        cnc.modeSet(CNC.Mode.LASER)
+        log.info("  Configured")
 
     if args.router:
-        print("Configuring the GRBL controller to run in Router mode...")
-        cnc.modeSet(CNC.Mode.ROUTER)
+        log.info("Configuring the GRBL controller to run in Router mode...")
         # We first connect to the GRBL controller and make sure that we send the correct settings
         # Report everything back
         cnc.grbl.writeSettings(10, 255)
@@ -506,8 +684,12 @@ def runCNC():
         # Create the GUI
         cnc.gui = RouterGui(cnc)
         # Then we can open the Shapeoko program
-        print("Starting Carbide Motion...")
-        cnc.process = subprocess.Popen(args.shapeoko_exec)
+        log.info("Starting Carbide Motion...")
+        cnc.app = pywinauto.Application().start(args.shapeoko_exec)
+        # Changing the Arduino to Router mode
+        log.info("Configuring the Arduino board to run in router mode...")
+        cnc.modeSet(CNC.Mode.ROUTER)
+        log.info("  Configured")
 
     # Main loop
     while True:
@@ -517,13 +699,13 @@ def runCNC():
         cnc.gui.update()
         if not cnc.gui.window:
             break
-        # Check that the associated process is still running
-        if cnc.process and cnc.process.poll() is not None:
+        # Check that the associated app is still running
+        if cnc.app and not cnc.app.is_process_running():
             break
 
-    # Clsoe the associated process if it is still running
-    if cnc.process:
-        cnc.process.kill()
+    # Clsoe the associated app if it is still running
+    if cnc.app:
+        cnc.app.kill()
 
 if __name__ == '__main__':
     sys.exit(runCNC())
