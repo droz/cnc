@@ -65,9 +65,9 @@ class OnOffToggle:
             self.on = tk.PhotoImage(file = resource_path("on.png"))
             self.off = tk.PhotoImage(file = resource_path("off.png"))
         self.button = tk.Button(window, image=self.off, command=self.switch, bd=0)
-        self.button.grid(column=1, row=row, padx=10, pady=5)
-        self.text = tk.Label(window, text=text, font=("Arial", 18))
-        self.text.grid(column=0, row=row, padx=10, pady=5)
+        self.button.grid(column=1, row=row, padx=5, pady=2)
+        self.text = tk.Label(window, text=text, font=("Arial", 11))
+        self.text.grid(column=0, row=row, padx=5, pady=2)
 
     def update(self, value):
         self.state = value
@@ -89,9 +89,9 @@ class ErrorText:
     def __init__(self, window, title, row):
         self.window = window
         self.frame = tk.LabelFrame(self.window, text="Error")
-        self.frame.grid(column=0, row=row, sticky=tk.W+tk.E, padx=10, pady=10)
-        self.text = tk.Label(self.frame, text="", font=("Arial", 18, "bold"), fg="red")
-        self.text.grid(column=0, row=0, padx=10, pady=5)
+        self.frame.grid(column=0, row=row, sticky=tk.W+tk.E, padx=3, pady=3)
+        self.text = tk.Label(self.frame, text="", font=("Arial", 11, "bold"), fg="red")
+        self.text.grid(column=0, row=0, padx=5, pady=2)
 
     def update(self, value):
         str = ""
@@ -118,9 +118,9 @@ class MultiChoice:
         self.callback = callback
         self.choices = choices
         self.options = tk.OptionMenu(window, self.value, *choices, command=self.changed)
-        self.options.grid(column=1, row=row, padx=10, pady=5)
-        self.text = tk.Label(window, text=text, font=("Arial", 18))
-        self.text.grid(column=0, row=row, padx=10, pady=5)
+        self.options.grid(column=1, row=row, padx=5, pady=2)
+        self.text = tk.Label(window, text=text, font=("Arial", 11))
+        self.text.grid(column=0, row=row, padx=5, pady=2)
 
     def update(self, value):
         self.value.set(self.choices[value])
@@ -135,9 +135,9 @@ class Slider:
         self.value = tk.DoubleVar(window, 0)
         self.callback = callback
         self.slider = tk.Scale(window, from_=min, to=max, orient=tk.HORIZONTAL, variable=self.value, command=self.changed, resolution=(max-min)/100)
-        self.slider.grid(column=1, row=row, padx=10, pady=5)
-        self.text = tk.Label(window, text=text, font=("Arial", 18))
-        self.text.grid(column=0, row=row, padx=10, pady=5)
+        self.slider.grid(column=1, row=row, padx=5, pady=2)
+        self.text = tk.Label(window, text=text, font=("Arial", 11))
+        self.text.grid(column=0, row=row, padx=5, pady=2)
 
     def update(self, value):
         self.value.set(value)
@@ -150,11 +150,11 @@ class Gauge:
     def __init__(self, window, text, row, column, min, max, nominal):
         self.window = window
         self.frame = tk.Frame(window)
-        self.frame.grid(column=column, row=row, padx=10, pady=5)
-        self.text = tk.Label(self.frame, text=text, font=("Arial", 18), anchor="center")
+        self.frame.grid(column=column, row=row, padx=5, pady=2)
+        self.text = tk.Label(self.frame, text=text, font=("Arial", 11), anchor="center")
         self.text.grid(column=0, row=0)
         self.value = tk.DoubleVar(self.frame, 0)
-        self.meter = tkdial.Meter(self.frame, start=min, end=max, radius = 150, width = 152, height = 152)
+        self.meter = tkdial.Meter(self.frame, start=min, end=max, radius = 100, width = 102, height = 102)
         if nominal:
             self.meter.set_mark(nominal - 10, nominal + 10, "green")
         self.meter.grid(column=0, row=1)
@@ -508,6 +508,7 @@ class Gui:
     def __init__(self):
         self.window = tk.Tk()
         self.window.protocol("WM_DELETE_WINDOW", self.onClosing)
+        self.window.attributes("-topmost", True)
     def update(self):
         self.window.update_idletasks()
         self.window.update()
@@ -521,10 +522,10 @@ class ManualGui(Gui):
         super().__init__()
         self.window.title("CNC - Manual mode")
         self.mode_frame = tk.LabelFrame(self.window, text="Mode")
-        self.mode_frame.grid(column=0, row=0, sticky=tk.W+tk.E, padx=10, pady=10)
+        self.mode_frame.grid(column=0, row=0, sticky=tk.W+tk.E, padx=5, pady=5)
         self.mode = MultiChoice(self.mode_frame, "Mode", 0, ["Idle", "Router", "Laser", "Manual"], cnc.modeChange)
         self.control = tk.LabelFrame(self.window, text="Control")
-        self.control.grid(column=0, row=1, sticky=tk.W+tk.E, padx=10, pady=10)
+        self.control.grid(column=0, row=1, sticky=tk.W+tk.E, padx=5, pady=5)
         self.spindle_on = OnOffToggle(self.control, "Spindle", 0, cnc.spindleToggle)
         self.laser_on = OnOffToggle(self.control, "Laser", 1, cnc.laserToggle)
         self.vacuum_on = OnOffToggle(self.control, "Vacuum", 2, cnc.vacuumToggle)
@@ -532,13 +533,14 @@ class ManualGui(Gui):
         self.air_on = OnOffToggle(self.control, "Air", 4, cnc.airToggle)
         self.pump_speed = Slider(self.control, "Coolant Pump", 5, 0, 100, cnc.pumpChange)
         self.status = tk.LabelFrame(self.window, text="Status")
-        self.status.grid(column=0, row=2, sticky=tk.W+tk.E, padx=10, pady=10)
+        self.status.grid(column=0, row=2, sticky=tk.W+tk.E, padx=5, pady=5)
         self.onoff_status = tk.Frame(self.status)
-        self.onoff_status.grid(column=0, row=0, sticky=tk.W+tk.E, padx=10, pady=10)
+        self.onoff_status.grid(column=0, row=0, sticky=tk.W+tk.E, padx=5, pady=5)
         self.door_closed = OnOffToggle(self.onoff_status, "Door Closed", 0, None, read_only=True)
         self.laser_present = OnOffToggle(self.onoff_status, "Laser Present", 1, None, read_only=True)
+        self.force_vacuum = OnOffToggle(self.onoff_status, "Force Vacuum", 2, None, read_only=True)
         self.gauge_status = tk.Frame(self.status)
-        self.gauge_status.grid(column=0, row=1, sticky=tk.W+tk.E, padx=10, pady=10)
+        self.gauge_status.grid(column=0, row=1, sticky=tk.W+tk.E, padx=5, pady=5)
         self.air_pressure = Gauge(self.gauge_status, "Air Pressure", 0, 0, 0, 100, 30)
         self.pwm = Gauge(self.gauge_status, "PWM", 0, 1, 0, 100, None)
 
@@ -548,20 +550,20 @@ class LaserGui(Gui):
         super().__init__()
         self.window.title("CNC - Laser mode")
         self.control = tk.LabelFrame(self.window, text="Control")
-        self.control.grid(column=0, row=0, sticky=tk.W+tk.E, padx=10, pady=10)
+        self.control.grid(column=0, row=0, sticky=tk.W+tk.E, padx=5, pady=5)
         self.laser_on = OnOffToggle(self.control, "Laser", 0, cnc.laserToggle)
         self.air_on = OnOffToggle(self.control, "Air", 1, cnc.airToggle)
         self.vacuum_on = OnOffToggle(self.control, "Vacuum", 2, cnc.vacuumToggle)
         self.hood_on = OnOffToggle(self.control, "Hood", 3, cnc.hoodToggle)
         self.status = tk.LabelFrame(self.window, text="Status")
-        self.status.grid(column=0, row=1, sticky=tk.W+tk.E, padx=10, pady=10)
+        self.status.grid(column=0, row=1, sticky=tk.W+tk.E, padx=5, pady=5)
         self.error = ErrorText(self.status, "Error", 0)
         self.onoff_status = tk.Frame(self.status)
-        self.onoff_status.grid(column=0, row=1, sticky=tk.W+tk.E, padx=10, pady=10)
+        self.onoff_status.grid(column=0, row=1, sticky=tk.W+tk.E, padx=5, pady=5)
         self.door_closed = OnOffToggle(self.onoff_status, "Door Closed", 0, None, read_only=True)
         self.laser_present = OnOffToggle(self.onoff_status, "Laser Present", 1, None, read_only=True)
         self.gauge_status = tk.Frame(self.status)
-        self.gauge_status.grid(column=0, row=2, sticky=tk.W+tk.E, padx=10, pady=10)
+        self.gauge_status.grid(column=0, row=2, sticky=tk.W+tk.E, padx=5, pady=5)
         self.air_pressure = Gauge(self.gauge_status, "Air Pressure", 0, 0, 0, 100, 30)
         self.pwm = Gauge(self.gauge_status, "PWM", 0, 1, 0, 100, None)
 
@@ -571,20 +573,20 @@ class RouterGui(Gui):
         super().__init__()
         self.window.title("CNC - Router mode")
         self.control = tk.LabelFrame(self.window, text="Control")
-        self.control.grid(column=0, row=0, sticky=tk.W+tk.E, padx=10, pady=10)
+        self.control.grid(column=0, row=0, sticky=tk.W+tk.E, padx=5, pady=5)
         self.spindle_on = OnOffToggle(self.control, "Spindle", 0, cnc.spindleToggle)
         self.air_on = OnOffToggle(self.control, "Air", 1, cnc.airToggle)
         self.vacuum_on = OnOffToggle(self.control, "Vacuum", 2, cnc.vacuumToggle)
         self.hood_on = OnOffToggle(self.control, "Hood", 3, cnc.hoodToggle)
         self.pump_speed = Slider(self.control, "Pump Speed", 4, 0, 100, cnc.pumpChange)
         self.status = tk.LabelFrame(self.window, text="Status")
-        self.status.grid(column=0, row=1, sticky=tk.W+tk.E, padx=10, pady=10)
+        self.status.grid(column=0, row=1, sticky=tk.W+tk.E, padx=5, pady=5)
         self.onoff_status = tk.Frame(self.status)
-        self.onoff_status.grid(column=0, row=0, sticky=tk.W+tk.E, padx=10, pady=10)
+        self.onoff_status.grid(column=0, row=0, sticky=tk.W+tk.E, padx=5, pady=5)
         self.door_closed = OnOffToggle(self.onoff_status, "Door Closed", 0, None, read_only=True)
         self.laser_present = OnOffToggle(self.onoff_status, "Laser Present", 1, None, read_only=True)
         self.gauge_status = tk.Frame(self.status)
-        self.gauge_status.grid(column=0, row=1, sticky=tk.W+tk.E, padx=10, pady=10)
+        self.gauge_status.grid(column=0, row=1, sticky=tk.W+tk.E, padx=5, pady=5)
         self.air_pressure = Gauge(self.gauge_status, "Air Pressure", 0, 0, 0, 100, 30)
         self.pwm = Gauge(self.gauge_status, "PWM", 0, 1, 0, 100, None)
 

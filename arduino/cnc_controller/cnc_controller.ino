@@ -473,6 +473,7 @@ bool processCmd() {
   }
   // Unknown command
   Serial.println("unknown");
+  debug_string = "Unknown command: " + cmd_buffer;
 
   return false;
 }
