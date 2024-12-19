@@ -362,7 +362,7 @@ bool processCmd() {
   }
   // If we are in IDLE mode, then all other commands are ignored
   if (mode == MODE_IDLE) {
-    Serial.println("unknown");
+    Serial.println("ignored");
     return true;
   }
   if (cmd_buffer.startsWith("submode=")) {
