@@ -110,10 +110,10 @@ class OnOffToggle:
 
 class ErrorText:
     """ This is used to implement a simple Error text indicator."""
-    def __init__(self, window, title, row):
+    def __init__(self, window, row):
         self.window = window
         self.text = tk.Label(self.window, text="", font=("Arial", 11, "bold"), fg="red", justify="left")
-        self.text.grid(column=0, row=0, padx=5, pady=2)
+        self.text.grid(column=0, row=row, padx=5, pady=2)
 
     def update(self, value):
         error_string = errorToString(value)
@@ -618,9 +618,9 @@ class ManualGui(Gui):
         self.gauge_status.grid(column=0, row=1, sticky=tk.W+tk.E, padx=5, pady=5)
         self.air_pressure = Gauge(self.gauge_status, "Air Pressure", 0, 0, 0, 100, 30)
         self.pwm = Gauge(self.gauge_status, "PWM", 0, 1, 0, 100, None)
-        self.error_frame = tk.LabelFrame(self.window, text="Error")
+        self.error_frame = tk.LabelFrame(self.window, text="Errors")
         self.error_frame.grid(column=0, row=3, sticky=tk.W+tk.E, padx=5, pady=5)
-        self.error = ErrorText(self.error_frame, "Error", 0)
+        self.error = ErrorText(self.error_frame, 0)
 
 class LaserGui(Gui):
     """ This class is used to create the GUI for the CNC controller in laser mode."""
@@ -643,9 +643,9 @@ class LaserGui(Gui):
         self.gauge_status.grid(column=0, row=2, sticky=tk.W+tk.E, padx=5, pady=5)
         self.air_pressure = Gauge(self.gauge_status, "Air Pressure", 0, 0, 0, 100, 30)
         self.pwm = Gauge(self.gauge_status, "PWM", 0, 1, 0, 100, None)
-        self.error_frame = tk.LabelFrame(self.window, text="Error")
+        self.error_frame = tk.LabelFrame(self.window, text="Errors")
         self.error_frame.grid(column=0, row=2, sticky=tk.W+tk.E, padx=5, pady=5)
-        self.error = ErrorText(self.error_frame, "Error", 0)
+        self.error = ErrorText(self.error_frame, 0)
 
 class RouterGui(Gui):
     """ This class is used to create the GUI for the CNC controller in router mode."""
@@ -671,9 +671,9 @@ class RouterGui(Gui):
         self.gauge_status.grid(column=0, row=1, sticky=tk.W+tk.E, padx=5, pady=5)
         self.air_pressure = Gauge(self.gauge_status, "Air Pressure", 0, 0, 0, 100, 30)
         self.pwm = Gauge(self.gauge_status, "PWM", 0, 1, 0, 100, None)
-        self.error_frame = tk.LabelFrame(self.window, text="Error")
+        self.error_frame = tk.LabelFrame(self.window, text="Errors")
         self.error_frame.grid(column=0, row=2, sticky=tk.W+tk.E, padx=5, pady=5)
-        self.error = ErrorText(self.error_frame, "Error", 0)
+        self.error = ErrorText(self.error_frame, 0)
 
 def killProgramByName(name):
     """ This function is used to kill a specific controller program.
