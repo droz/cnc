@@ -376,6 +376,83 @@ class ArduinoInterface:
             if response == 'ignored\n':
                 log.warning(f"Value {key}={value} ignored by Arduino (it is probably in the wrong mode)")
 
+class LightburnInterface:
+    """ This class is used to interface with the Lightburn program."""
+    def __init__(self, executable_path):
+        self.last_pause_time = 0
+        log.info("Launching Lightburn...")
+        pywinauto.timings.Timings.fast()
+        self.app = pywinauto.Application(backend="uia").start(executable_path)
+        log.info("  Launched")
+        time.sleep(5)
+        log.info("Finding the pause button...")
+        start_time = time.time()
+        self.pause_button = None
+        while time.time() - start_time < 10:
+            try:
+                self.pause_button = self.findPauseButton()
+                break
+            except Exception as e:
+                log.info("  Could not find the pause button yet..." + str(e))
+        if not self.pause_button:
+            raise Exception("Could not find the pause button in Lightburn after 20 seconds")
+        log.info(f"  Found in {time.time() - start_time:.1f} seconds")
+
+    def findPauseButton(self):
+        """ This function is used to find the pause button in the Lightburn program.
+        Returns:
+            The pause button object."""
+        # This code is equivalent to :
+        #    return self.app.top_window().dwLaser.PauseButton.wrapper_object()
+        # But the above code takes 8s to run, while the code below takes 500ms
+        log.info("  Finding the pause button...")
+        top_window = self.app.top_window().wrapper_object()
+        log.info("  Found top window")
+        laser_dock_widget = [element for element in top_window.children() if element.window_text() == "Laser" and element.class_name() == "QDockWidget"]
+        if not laser_dock_widget:
+            return Exception("Could not find the \"Laser\" dock widget in LightBurn.")
+        if len(laser_dock_widget) > 1:
+            raise Exception("Found more than one \"Laser\" dock widget in LightBurn.")
+        laser_dock_widget = laser_dock_widget[0]
+        laser_group = [element for element in laser_dock_widget.children() if element.window_text() == "" and element.class_name() == "QWidget"]
+        if not laser_group:
+            raise Exception("Could not find the \"Laser\" group in LightBurn.")
+        if len(laser_group) > 1:
+            raise Exception("Found more than one \"Laser\" group in LightBurn.")
+        laser_group = laser_group[0]
+        pause_button = [element for element in laser_group.children() if element.window_text() == "Pause" and element.class_name() == "QPushButton"]
+        if not pause_button:
+            raise Exception("Could not find the \"Pause\" button in LightBurn.")
+        if len(pause_button) > 1:
+            raise Exception("Found more than one \"Pause\" button in LightBurn.")
+        pause_button = pause_button[0]
+        return pause_button
+
+    def isRunning(self):
+        """ This function is used to check if the Lightburn program is running."""
+        return self.app.is_process_running()
+
+    def kill(self):
+        """ This function is used to kill the Lightburn program."""
+        self.app.kill()
+
+    def isPaused(self):
+        """ This function is used to check if the Lightburn program is paused."""
+        pause_button_text = self.pause_button.texts()[0]
+        if pause_button_text == "Pause":
+            return False
+        if pause_button_text == "Resume":
+            return True
+        raise Exception(f"Unknown pause button text: {pause_button_text}")
+
+    def pause(self):
+        """ This function is used to send a pause command to the Lightburn program."""
+        if not self.isPaused() and time.time() - self.last_pause_time > 0.5:
+            self.pause_button.click()
+            self.last_pause_time = time.time()
+            return True
+        return False
+
 class CNC:
     class Mode(enum.Enum):
         IDLE = 0
@@ -407,7 +484,7 @@ class CNC:
 
         # Check that the CNC is still in the expected mode
         if self.expected_mode and "mode" in self.status and self.status["mode"] != self.expected_mode.value:
-            log.warning(f"Arduino is in mode {self.status['mode']} but we expected {self.expected_mode.value}. Chamging it back.")
+            log.warning(f"Arduino is in mode {self.status['mode']} but we expected {self.expected_mode.value}. Changing it back.")
             self.modeSet(self.expected_mode)
             return
 
@@ -559,12 +636,8 @@ class CNC:
 
         if (errors and (status["mode"] == CNC.Mode.LASER.value) and status["pwm"] > MIN_PWM and
            (time.time() - self.last_pause_time > 1)):
-            log.error("Error reported while laser is on. Sending pause command to Lightburn.")
-            try:
-                self.app.top_window().type_keys("{VK_PAUSE}")
-                self.last_pause_time = time.time()
-            except Exception as e:
-                log.error(f"Error sending pause command to Lightburn: {e}")
+            if self.app.pause():
+                log.error("Error reported while laser is on. Sent pause command to Lightburn.")
             error_string = errorToString(errors)
             self.gui.error_message = "Errors were reported while trying to turn the laser on:\n\n" + error_string + "\n\nLightburn has been paused."
 
@@ -745,8 +818,7 @@ def runCNC():
         # Create the GUI
         cnc.gui = LaserGui(cnc)
         # Then we can open the Lightburn program
-        log.info("Starting Lightburn...")
-        cnc.app = pywinauto.Application().start(args.lighburn_exec)
+        cnc.app = LightburnInterface(args.lighburn_exec)        
         # Changing the Arduino to Laser mode
         log.info("Configuring the Arduino board to run in laser mode...")
         cnc.expected_mode = CNC.Mode.LASER
@@ -774,7 +846,7 @@ def runCNC():
         cnc.gui = RouterGui(cnc)
         # Then we can open the Shapeoko program
         log.info("Starting Carbide Motion...")
-        cnc.app = pywinauto.Application().start(args.shapeoko_exec)
+        cnc.app = pywinauto.Application(backend="uia").start(args.shapeoko_exec)
         # Changing the Arduino to Router mode
         log.info("Configuring the Arduino board to run in router mode...")
         cnc.expected_mode = CNC.Mode.ROUTER
@@ -793,7 +865,7 @@ def runCNC():
             if not cnc.gui.window:
                 break
             # Check that the associated app is still running
-            if cnc.app and not cnc.app.is_process_running():
+            if cnc.app and not cnc.app.isRunning():
                 break
             # Check that the CNC thread is still running
             if not cnc_thread.is_alive():
